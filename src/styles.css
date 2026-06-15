@@ -868,7 +868,7 @@ button {
 
 .queue-row {
   display: grid;
-  grid-template-columns: 132px minmax(160px, 1fr) minmax(180px, 1fr) 88px 220px 112px;
+  grid-template-columns: 132px minmax(160px, 1fr) minmax(180px, 1fr) 88px 220px 112px 48px;
   gap: 8px;
   align-items: center;
   min-height: 40px;
@@ -939,8 +939,19 @@ button {
   color: var(--blue);
 }
 
+.queue-status.canceling,
+.queue-status.canceled {
+  color: var(--gold);
+}
+
 .queue-status.deleting {
   color: #ffb3b3;
+}
+
+.queue-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .queue-empty {
@@ -1123,6 +1134,24 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status-cancel {
+  height: 28px;
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: #ffb0b0;
+  background: rgba(255, 107, 107, 0.08);
+  cursor: pointer;
+}
+
+.status-cancel:hover {
+  border-color: rgba(255, 107, 107, 0.68);
+  background: rgba(255, 107, 107, 0.14);
 }
 
 .modal-backdrop {
@@ -1359,7 +1388,8 @@ button {
 
   .queue-row span:nth-child(3),
   .queue-row span:nth-child(4),
-  .queue-row span:nth-child(6) {
+  .queue-row span:nth-child(6),
+  .queue-row span:nth-child(7) {
     display: none;
   }
 

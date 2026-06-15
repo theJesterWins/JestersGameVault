@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
@@ -144,6 +144,10 @@ function createMockApi() {
         elapsedMs: 900
       };
     },
+    async cancelTransfer() {
+      await wait(100);
+      return { cancelled: true, active: true };
+    },
     async verifyIsoKeyPair(payload) {
       await wait(200);
       return {
@@ -182,6 +186,7 @@ function wait(ms) {
 const api = window.vaultAPI || createMockApi();
 
 function App() {
+  const canceledTransfersRef = useRef(new Set());
   const [connection, setConnection] = useState({
     host: "",
     port: "21",
@@ -274,7 +279,7 @@ function App() {
                 bytesPerSecond: progress.bytesPerSecond,
                 remainingMs: progress.remainingMs,
                 elapsedMs: progress.elapsedMs,
-                status: "Transferring"
+                status: item.status === "Canceling" || item.status === "Canceled" ? item.status : "Transferring"
               }
             : item
         )
@@ -329,6 +334,7 @@ function App() {
   const activeTransfer = useMemo(() => {
     return (
       queue.find((item) => item.status === "Transferring") ||
+      queue.find((item) => item.status === "Canceling") ||
       queue.find((item) => item.status === "Queued" || item.status === "Deleting") ||
       queue.find((item) => item.status === "Failed") ||
       queue.find((item) => item.status === "Completed") ||
@@ -515,6 +521,7 @@ function App() {
     const queuedFiles = prepareUploadJobs(filesForUpload);
     const uploadedJobs = [];
     let failedUploads = 0;
+    let canceledUploads = 0;
     const shouldVerifyIsoKeys = isPs3IsoTarget(remote.path) && queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
 
     setQueue((items) => [
@@ -533,6 +540,23 @@ function App() {
     ]);
 
     for (const { entry, id, remoteName } of queuedFiles) {
+      if (canceledTransfersRef.current.has(id)) {
+        canceledUploads += 1;
+        setQueue((items) =>
+          items.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  status: "Canceled",
+                  note: "Canceled before start"
+                }
+              : item
+          )
+        );
+        pushEvent("warn", `Transfer canceled before start: ${entry.name}.`);
+        continue;
+      }
+
       setStatus(`Uploading ${entry.name} to ${remote.path}${remoteName}`);
       try {
         const result = await api.uploadToRemote({
@@ -541,6 +565,23 @@ function App() {
           remoteDir: remote.path,
           remoteName
         });
+        if (canceledTransfersRef.current.has(id)) {
+          canceledUploads += 1;
+          setQueue((items) =>
+            items.map((item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    status: "Canceled",
+                    note: "Canceled"
+                  }
+                : item
+            )
+          );
+          setStatus(`Transfer canceled: ${entry.name}`);
+          pushEvent("warn", `Transfer canceled for ${entry.name}.`);
+          continue;
+        }
         uploadedJobs.push({ entry, id, remoteName, result });
         setQueue((items) =>
           items.map((item) =>
@@ -557,6 +598,25 @@ function App() {
         );
         setStatus(`Transfer complete: ${entry.name}`);
       } catch (error) {
+        const wasCanceled = canceledTransfersRef.current.has(id) || error.message.toLowerCase().includes("canceled");
+        if (wasCanceled) {
+          canceledUploads += 1;
+          setQueue((items) =>
+            items.map((item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    status: "Canceled",
+                    note: "Canceled; partial file may remain on PS3"
+                  }
+                : item
+            )
+          );
+          setStatus(`Transfer canceled: ${entry.name}`);
+          pushEvent("warn", `Transfer canceled for ${entry.name}. Partial file may remain on the PS3.`);
+          continue;
+        }
+
         failedUploads += 1;
         setQueue((items) =>
           items.map((item) => (item.id === id ? { ...item, status: "Failed", error: error.message } : item))
@@ -575,8 +635,38 @@ function App() {
 
     await refreshRemote(remote.path);
 
-    if (uploadedJobs.length > 0 && failedUploads === 0 && settings.refreshAfterUpload) {
+    if (uploadedJobs.length > 0 && failedUploads === 0 && canceledUploads === 0 && settings.refreshAfterUpload) {
       await runWebmanAction("refresh");
+    } else if (canceledUploads > 0 && failedUploads === 0) {
+      setStatus(`Transfer queue finished with ${canceledUploads} canceled item(s).`);
+    }
+  }
+
+  async function cancelQueueItem(item) {
+    if (!item || !["Queued", "Transferring"].includes(item.status)) return;
+
+    canceledTransfersRef.current.add(item.id);
+    setQueue((items) =>
+      items.map((current) =>
+        current.id === item.id
+          ? {
+              ...current,
+              status: current.status === "Transferring" ? "Canceling" : "Canceled",
+              note: current.status === "Transferring" ? "Cancel requested" : "Canceled before start"
+            }
+          : current
+      )
+    );
+
+    setStatus(`Cancel requested: ${fileNameFromPath(item.source)}.`);
+    pushEvent("warn", `Cancel requested for ${fileNameFromPath(item.source)}.`);
+
+    if (item.status === "Transferring" && window.vaultAPI) {
+      try {
+        await api.cancelTransfer({ id: item.id });
+      } catch (error) {
+        pushEvent("error", `Cancel request failed: ${error.message}`);
+      }
     }
   }
 
@@ -769,7 +859,7 @@ function App() {
   }
 
   function clearCompleted() {
-    setQueue((items) => items.filter((item) => !["Completed", "Verified"].includes(item.status)));
+    setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled"].includes(item.status)));
   }
 
   return (
@@ -963,7 +1053,7 @@ function App() {
             </button>
           </div>
         </div>
-        <QueueTable items={queue} />
+        <QueueTable items={queue} onCancel={cancelQueueItem} />
         <LiveLog events={events} />
       </section>
 
@@ -973,6 +1063,7 @@ function App() {
         status={status}
         lastProgressAt={lastProgressAt}
         nowMs={nowMs}
+        onCancel={cancelQueueItem}
       />
 
       {deleteCandidate ? (
@@ -1230,7 +1321,7 @@ function TransferColumn({ selectedLocalEntry, onTransfer, onChooseFiles, connect
   );
 }
 
-function QueueTable({ items }) {
+function QueueTable({ items, onCancel }) {
   if (items.length === 0) {
     return (
       <div className="queue-empty">
@@ -1249,6 +1340,7 @@ function QueueTable({ items }) {
         <span>Size</span>
         <span>Progress</span>
         <span>Status</span>
+        <span>Action</span>
       </div>
       {items.map((item) => (
         <div className="queue-row" role="row" key={item.id}>
@@ -1268,6 +1360,13 @@ function QueueTable({ items }) {
             </small>
           </span>
           <span className={`queue-status ${item.status.toLowerCase()}`}>{item.status}</span>
+          <span className="queue-action">
+            {["Queued", "Transferring"].includes(item.status) ? (
+              <button className="icon-button danger" type="button" title="Cancel transfer" onClick={() => onCancel(item)}>
+                <X size={15} />
+              </button>
+            ) : null}
+          </span>
         </div>
       ))}
     </div>
@@ -1331,10 +1430,11 @@ function getIsoKeyPairPrompt(files) {
   return null;
 }
 
-function StatusBar({ connection, activeTransfer, status, lastProgressAt, nowMs }) {
+function StatusBar({ connection, activeTransfer, status, lastProgressAt, nowMs, onCancel }) {
   const secondsSinceProgress = lastProgressAt ? Math.floor((nowMs - lastProgressAt) / 1000) : null;
   const isMoving = activeTransfer?.status === "Transferring" && secondsSinceProgress !== null && secondsSinceProgress < 15;
   const isProblem = activeTransfer?.status === "Failed" || (!connection.connected && activeTransfer?.status === "Transferring");
+  const canCancel = activeTransfer && ["Queued", "Transferring"].includes(activeTransfer.status);
   const mode = isProblem ? "error" : isMoving ? "moving" : connection.connected ? "ready" : "offline";
   const activeName = activeTransfer ? fileNameFromPath(activeTransfer.source) : "No active transfer";
   const copiedText = activeTransfer?.bytesTransferred
@@ -1364,6 +1464,12 @@ function StatusBar({ connection, activeTransfer, status, lastProgressAt, nowMs }
         <span>{speedText}</span>
         <span>{etaText}</span>
         <span>{freshnessText}</span>
+        {canCancel ? (
+          <button className="status-cancel" type="button" onClick={() => onCancel(activeTransfer)}>
+            <X size={14} />
+            Cancel
+          </button>
+        ) : null}
       </div>
     </footer>
   );

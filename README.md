@@ -84,6 +84,7 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Verify after upload that a PS3 ISO and matching same-name key are present on the PS3
 - Vault Doctor checks for missing keys, orphan keys, duplicates, size mismatches, and wrong target folders
 - Optional webMAN MOD XML refresh after successful uploads
+- Cancel queued transfers or abort the active FTP upload; partial files remain visible for review
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation
 - Transfer queue with upload and delete status from Electron
 - webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons

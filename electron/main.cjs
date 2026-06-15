@@ -9,6 +9,7 @@ let mainWindow;
 let ftpClient;
 let ftpConfig;
 let ftpTaskQueue = Promise.resolve();
+const activeUploadCancelers = new Map();
 
 const PS3_DEFAULT_PATH = "/dev_hdd0/PS2ISO/";
 
@@ -188,7 +189,8 @@ function runFtpTask(label, task) {
       emitVaultEvent("success", `${label} finished.`);
       return result;
     } catch (error) {
-      emitVaultEvent("error", `${label} failed: ${error.message}`);
+      const wasCanceled = error.message.toLowerCase().includes("canceled");
+      emitVaultEvent(wasCanceled ? "warn" : "error", `${label} ${wasCanceled ? "canceled" : "failed"}: ${error.message}`);
       throw error;
     }
   });
@@ -322,6 +324,22 @@ ipcMain.handle("ftp:status", async () => ({
   user: ftpConfig?.user
 }));
 
+ipcMain.handle("ftp:cancel-transfer", async (_event, payload) => {
+  const transferId = payload?.id;
+  if (!transferId) {
+    throw new Error("Transfer id is required.");
+  }
+
+  const cancelUpload = activeUploadCancelers.get(transferId);
+  if (!cancelUpload) {
+    emitVaultEvent("warn", `Cancel requested for queued transfer ${transferId}.`);
+    return { cancelled: true, active: false, id: transferId };
+  }
+
+  cancelUpload();
+  return { cancelled: true, active: true, id: transferId };
+});
+
 ipcMain.handle("ftp:list", async (_event, remotePath) => runFtpTask("Remote list", async () => {
   await ensureConnected();
   const normalizedPath = normalizeRemotePath(remotePath);
@@ -349,6 +367,7 @@ ipcMain.handle("ftp:list", async (_event, remotePath) => runFtpTask("Remote list
 
 ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", async () => {
   await ensureConnected();
+  const transferClient = ftpClient;
 
   const stat = await fs.stat(payload.localPath);
   if (stat.isDirectory()) {
@@ -365,6 +384,7 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
   let pollTimer;
   let pollInFlight = false;
   let pollWarningEmitted = false;
+  let wasCanceled = false;
 
   const pollRemoteSize = async () => {
     if (pollInFlight) return;
@@ -407,17 +427,45 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
   });
   emitProgress(0);
 
-  ftpClient.trackProgress((info) => {
+  const cancelUpload = () => {
+    wasCanceled = true;
+    emitVaultEvent("warn", `Cancel requested: ${path.basename(payload.localPath)}.`, {
+      transferId,
+      remotePath
+    });
+    if (pollClient) {
+      pollClient.close();
+      pollClient = undefined;
+    }
+    if (transferClient && !transferClient.closed) {
+      transferClient.close();
+    }
+    if (ftpClient === transferClient) {
+      ftpClient = undefined;
+    }
+  };
+
+  activeUploadCancelers.set(transferId, cancelUpload);
+
+  transferClient.trackProgress((info) => {
     emitProgress(info.bytesOverall);
   });
 
   try {
-    await ftpClient.ensureDir(remoteDir);
+    await transferClient.ensureDir(remoteDir);
     pollTimer = setInterval(pollRemoteSize, 5000);
     await pollRemoteSize();
-    await ftpClient.uploadFrom(payload.localPath, remotePath);
+    await transferClient.uploadFrom(payload.localPath, remotePath);
     emitProgress(stat.size);
   } catch (error) {
+    if (wasCanceled) {
+      emitVaultEvent("warn", `Upload canceled: ${path.basename(payload.localPath)}.`, {
+        transferId,
+        remotePath
+      });
+      throw new Error("Transfer canceled by user.");
+    }
+
     emitVaultEvent("error", `Upload failed: ${path.basename(payload.localPath)}.`, {
       transferId,
       remotePath,
@@ -425,7 +473,12 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
     });
     throw error;
   } finally {
-    ftpClient.trackProgress();
+    activeUploadCancelers.delete(transferId);
+    try {
+      transferClient.trackProgress();
+    } catch {
+      // A canceled transfer closes the FTP client before progress cleanup.
+    }
     stopPolling();
   }
 
