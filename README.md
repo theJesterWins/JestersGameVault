@@ -1,0 +1,59 @@
+# Jester's Game Vault
+
+A PS3-focused desktop FTP client with a WinSCP-style two-pane workflow.
+
+This app is intended for legally owned disc backups, homebrew, and console maintenance on a jailbroken PS3 running Evilnat CFW, Cobra, and webMAN MOD.
+
+The main workflow is simple: dump or preserve a disc you own, select the correct PS3 ISO folder, transfer the backup, then refresh webMAN MOD so the game appears on the XMB.
+
+## PS3 connection defaults
+
+- Host: your PS3 IP address
+- Port: `21`
+- Username: `anonymous`
+- Password: blank
+
+## Built-in PS3 target folders
+
+- `/dev_hdd0/PS3ISO/` for PS3 ISO backups
+- `/dev_hdd0/PS2ISO/` for PS2 ISO backups
+- `/dev_hdd0/PSXISO/` for PS1 BIN/CUE or ISO backups
+- `/dev_hdd0/PSPISO/` for PSP ISO backups
+
+## Run from source
+
+```powershell
+cd D:\Projects\JestersGameVault
+npm install
+npm run dev
+```
+
+## Build a Windows beta EXE
+
+```powershell
+npm install
+npm run release:beta
+```
+
+The GitHub beta zip is written to `artifacts/github-beta/`. It contains a portable app folder with `Jester's Game Vault.exe` inside. It does not install anything system-wide.
+
+For Windows trust and publisher identity, see [docs/windows-signing.md](docs/windows-signing.md).
+
+## Faster wired transfers
+
+For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ethernet-ps3.md](docs/direct-ethernet-ps3.md) for router-wired and direct PC-to-PS3 setup.
+
+## Current features
+
+- Dual-pane local and PS3 FTP browser
+- Connect to the PS3 by IP address using the webMAN MOD FTP defaults
+- Upload selected local files, picked files, or dropped files to the active PS3 folder
+- Delete selected files or folders from `/dev_hdd0/...` after confirmation
+- Transfer queue with upload and delete status from Electron
+- webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons
+- Direct LAN preset and FTP speed test for later Ethernet experiments
+- Browser-preview fallback when Electron APIs are unavailable
+
+## Notes
+
+Delete is intentionally limited to `/dev_hdd0/...` paths and requires confirmation. The first version still avoids broader destructive actions such as local deletes, remote rename, and overwrite management.
