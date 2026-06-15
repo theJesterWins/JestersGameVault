@@ -84,6 +84,7 @@ function file(name, type, size, modifiedAt) {
 
 function createMockApi() {
   let remotePath = "/dev_hdd0/PS3ISO/";
+  const mockFailureMode = new window.URLSearchParams(window.location.search).has("mockFailure");
 
   return {
     async listLocal(targetPath) {
@@ -97,7 +98,15 @@ function createMockApi() {
       return "";
     },
     async pickLocalFiles() {
-      return [file("selected_ps3_backup.iso", "ISO", 8_900_000_000, new Date().toISOString())].map((entry) => ({
+      const picked = mockFailureMode
+        ? [
+            file("queue_good_one.iso", "ISO", 4_200_000_000, new Date().toISOString()),
+            file("queue_fail_middle.iso", "ISO", 4_400_000_000, new Date().toISOString()),
+            file("queue_good_two.iso", "ISO", 4_600_000_000, new Date().toISOString())
+          ]
+        : [file("selected_ps3_backup.iso", "ISO", 8_900_000_000, new Date().toISOString())];
+
+      return picked.map((entry) => ({
         ...entry,
         path: `C:\\Backups\\${entry.name}`
       }));
@@ -134,8 +143,11 @@ function createMockApi() {
       };
     },
     async uploadToRemote(payload) {
-      await wait(900);
+      await wait(mockFailureMode ? 350 : 900);
       const remoteName = payload.remoteName || payload.localPath.split("\\").pop();
+      if (mockFailureMode && remoteName === "queue_fail_middle.iso") {
+        throw new Error("Mock transfer failed for queue isolation QA.");
+      }
       return {
         id: payload.id,
         remotePath: `${payload.remoteDir}${remoteName}`,
@@ -187,6 +199,7 @@ const api = window.vaultAPI || createMockApi();
 
 function App() {
   const canceledTransfersRef = useRef(new Set());
+  const uploadRunnerRef = useRef(Promise.resolve());
   const [connection, setConnection] = useState({
     host: "",
     port: "21",
@@ -518,26 +531,49 @@ function App() {
       return;
     }
 
+    const targetRemotePath = remote.path;
     const queuedFiles = prepareUploadJobs(filesForUpload);
+    const shouldVerifyIsoKeys = isPs3IsoTarget(targetRemotePath) && queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
+    const queuedRows = queuedFiles.map(({ entry, id, remoteName, note }) => ({
+      id,
+      operation: isPs3IsoKeyFile(remoteName) ? "Transfer PS3 key" : "Transfer to PS3",
+      source: entry.path,
+      destination: `${targetRemotePath}${remoteName}`,
+      size: entry.size,
+      progress: 0,
+      status: "Queued",
+      note,
+      elapsedMs: 0
+    }));
+
+    setQueue((items) => insertQueuedRows(items, queuedRows));
+    setStatus(`Queued ${queuedFiles.length} transfer(s). The queue will keep going if one item fails.`);
+    pushEvent("info", `Queued ${queuedFiles.length} transfer(s) for ${targetRemotePath}.`);
+
+    const batchPromise = uploadRunnerRef.current
+      .catch(() => {})
+      .then(() =>
+        runUploadBatch({
+          queuedFiles,
+          targetRemotePath,
+          shouldVerifyIsoKeys,
+          refreshAfterUpload: settings.refreshAfterUpload
+        })
+      );
+
+    uploadRunnerRef.current = batchPromise.catch((error) => {
+      const message = error?.message || String(error);
+      setStatus(`Queue worker failed: ${message}`);
+      pushEvent("error", `Queue worker failed: ${message}`);
+    });
+
+    return uploadRunnerRef.current;
+  }
+
+  async function runUploadBatch({ queuedFiles, targetRemotePath, shouldVerifyIsoKeys, refreshAfterUpload }) {
     const uploadedJobs = [];
     let failedUploads = 0;
     let canceledUploads = 0;
-    const shouldVerifyIsoKeys = isPs3IsoTarget(remote.path) && queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
-
-    setQueue((items) => [
-      ...queuedFiles.map(({ entry, id, remoteName, note }) => ({
-        id,
-        operation: isPs3IsoKeyFile(remoteName) ? "Transfer PS3 key" : "Transfer to PS3",
-        source: entry.path,
-        destination: `${remote.path}${remoteName}`,
-        size: entry.size,
-        progress: 0,
-        status: "Queued",
-        note,
-        elapsedMs: 0
-      })),
-      ...items
-    ]);
 
     for (const { entry, id, remoteName } of queuedFiles) {
       if (canceledTransfersRef.current.has(id)) {
@@ -557,12 +593,15 @@ function App() {
         continue;
       }
 
-      setStatus(`Uploading ${entry.name} to ${remote.path}${remoteName}`);
+      setStatus(`Uploading ${entry.name} to ${targetRemotePath}${remoteName}`);
+      setQueue((items) =>
+        items.map((item) => (item.id === id ? { ...item, status: "Transferring", note: item.note || "Starting" } : item))
+      );
       try {
         const result = await api.uploadToRemote({
           id,
           localPath: entry.path,
-          remoteDir: remote.path,
+          remoteDir: targetRemotePath,
           remoteName
         });
         if (canceledTransfersRef.current.has(id)) {
@@ -598,7 +637,8 @@ function App() {
         );
         setStatus(`Transfer complete: ${entry.name}`);
       } catch (error) {
-        const wasCanceled = canceledTransfersRef.current.has(id) || error.message.toLowerCase().includes("canceled");
+        const message = error?.message || String(error);
+        const wasCanceled = canceledTransfersRef.current.has(id) || message.toLowerCase().includes("canceled");
         if (wasCanceled) {
           canceledUploads += 1;
           setQueue((items) =>
@@ -619,27 +659,34 @@ function App() {
 
         failedUploads += 1;
         setQueue((items) =>
-          items.map((item) => (item.id === id ? { ...item, status: "Failed", error: error.message } : item))
+          items.map((item) => (item.id === id ? { ...item, status: "Failed", error: message, note: "Queue continued" } : item))
         );
-        setStatus(`Transfer failed for ${entry.name}: ${error.message}`);
-        pushEvent("error", `Transfer failed for ${entry.name}: ${error.message}`);
-        if (error.message.includes("Not connected")) {
+        setStatus(`Transfer failed for ${entry.name}: ${message}`);
+        pushEvent("error", `Transfer failed for ${entry.name}: ${message}. Continuing with the next queued item.`);
+        if (message.includes("Not connected to the PS3 FTP server")) {
           setConnection((current) => ({ ...current, connected: false }));
         }
       }
     }
 
-    if (shouldVerifyIsoKeys) {
-      await verifyUploadedIsoKeys(uploadedJobs);
+    if (shouldVerifyIsoKeys && uploadedJobs.length > 0) {
+      await verifyUploadedIsoKeys(uploadedJobs, targetRemotePath);
     }
 
-    await refreshRemote(remote.path);
+    await refreshRemote(targetRemotePath);
 
-    if (uploadedJobs.length > 0 && failedUploads === 0 && canceledUploads === 0 && settings.refreshAfterUpload) {
+    if (uploadedJobs.length > 0 && refreshAfterUpload) {
       await runWebmanAction("refresh");
-    } else if (canceledUploads > 0 && failedUploads === 0) {
-      setStatus(`Transfer queue finished with ${canceledUploads} canceled item(s).`);
     }
+
+    const summary = formatUploadBatchSummary({
+      total: queuedFiles.length,
+      completed: uploadedJobs.length,
+      failed: failedUploads,
+      canceled: canceledUploads
+    });
+    setStatus(summary);
+    pushEvent(failedUploads > 0 || canceledUploads > 0 ? "warn" : "success", summary);
   }
 
   async function cancelQueueItem(item) {
@@ -693,12 +740,12 @@ function App() {
     };
   }
 
-  async function verifyUploadedIsoKeys(uploadedJobs) {
+  async function verifyUploadedIsoKeys(uploadedJobs, targetRemotePath = remote.path) {
     const isoJobs = uploadedJobs.filter((job) => isPs3IsoFile(job.remoteName));
     for (const job of isoJobs) {
       try {
         const result = await api.verifyIsoKeyPair({
-          remoteDir: remote.path,
+          remoteDir: targetRemotePath,
           isoName: job.remoteName,
           expectedIsoBytes: job.entry.size
         });
@@ -859,7 +906,7 @@ function App() {
   }
 
   function clearCompleted() {
-    setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled"].includes(item.status)));
+    setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled", "Skipped"].includes(item.status)));
   }
 
   return (
@@ -1391,6 +1438,22 @@ function LiveLog({ events }) {
       </div>
     </section>
   );
+}
+
+const QUEUE_HISTORY_STATUSES = new Set(["Completed", "Verified", "Failed", "Canceled", "Skipped"]);
+
+function insertQueuedRows(items, queuedRows) {
+  const activeRows = items.filter((item) => !QUEUE_HISTORY_STATUSES.has(item.status));
+  const historyRows = items.filter((item) => QUEUE_HISTORY_STATUSES.has(item.status));
+  return [...activeRows, ...queuedRows, ...historyRows];
+}
+
+function formatUploadBatchSummary({ total, completed, failed, canceled }) {
+  const parts = [`${completed}/${total} completed`];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (canceled > 0) parts.push(`${canceled} canceled`);
+  const suffix = failed > 0 || canceled > 0 ? " Remaining queued items kept running." : "";
+  return `Transfer queue finished: ${parts.join(", ")}.${suffix}`;
 }
 
 function prepareUploadJobs(files) {

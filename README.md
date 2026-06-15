@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.6-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-0.1.7-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
@@ -87,6 +87,7 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Vault Doctor checks for missing keys, orphan keys, duplicates, size mismatches, and wrong target folders
 - Optional webMAN MOD XML refresh after successful uploads
 - Cancel queued transfers or abort the active FTP upload; partial files remain visible for review
+- Queue multiple batches safely; one failed game marks only that row and the rest keep running
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation
 - Transfer queue with upload and delete status from Electron
 - webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons

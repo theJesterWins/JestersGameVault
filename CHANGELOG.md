@@ -2,6 +2,23 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.7 - 2026-06-15
+
+- Added a resilient upload queue runner so newly selected games wait behind the active batch instead of racing it.
+- Kept the queue moving after a single transfer fails, while marking only the bad row as `Failed`.
+- Added per-batch completion summaries with completed, failed, and canceled counts.
+- Let successful uploads still trigger the optional webMAN MOD XML refresh even when another queued item failed.
+- Kept ISO/key verification tied to the PS3 folder that was queued, even if the user browses somewhere else while transfers run.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `npm run pack:linux`
+- `npm run release:beta`
+- Browser mock failure queue check: completed, failed, completed
+- Packaged Windows EXE mount check
+
 ## 0.1.6 - 2026-06-15
 
 - Added cancel controls for queued transfers in the queue table.
