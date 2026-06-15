@@ -260,6 +260,26 @@ ipcMain.handle("local:pick-key-file", async () => {
   return localFileEntry(result.filePaths[0]);
 });
 
+ipcMain.handle("local:find-matching-key-file", async (_event, isoPath) => {
+  if (!isoPath || path.extname(isoPath).toLowerCase() !== ".iso") return null;
+  const dirName = path.dirname(isoPath);
+  const baseName = path.basename(isoPath, path.extname(isoPath));
+  const candidates = [
+    path.join(dirName, `${baseName}.key`),
+    path.join(dirName, `${baseName}.dkey`)
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      return await localFileEntry(candidate);
+    } catch {
+      // Keep looking; missing adjacent key files are expected.
+    }
+  }
+
+  return null;
+});
+
 ipcMain.handle("ftp:connect", async (_event, config) => {
   if (ftpClient) ftpClient.close();
 

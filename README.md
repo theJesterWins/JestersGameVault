@@ -76,10 +76,14 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 
 - Dual-pane local and PS3 FTP browser
 - Connect to the PS3 by IP address using the webMAN MOD FTP defaults
+- Save multiple PS3 connection profiles for quick switching
 - Upload selected local files, picked files, or dropped files to the active PS3 folder
 - Select a PS3 ISO, then choose its `.key` / `.dkey` in a pairing popup before upload
+- Auto-detect a same-folder PS3 ISO key and prefill the pairing popup
 - Check that the key filename spelling exactly matches the ISO filename before paired upload
 - Verify after upload that a PS3 ISO and matching same-name key are present on the PS3
+- Vault Doctor checks for missing keys, orphan keys, duplicates, size mismatches, and wrong target folders
+- Optional webMAN MOD XML refresh after successful uploads
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation
 - Transfer queue with upload and delete status from Electron
 - webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons

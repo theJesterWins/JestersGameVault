@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  AlertTriangle,
+  BadgeCheck,
   Cable,
   Check,
   ChevronLeft,
   ChevronRight,
   Circle,
+  ClipboardCheck,
   Disc3,
   Download,
   FileUp,
@@ -18,6 +21,7 @@ import {
   Power,
   RefreshCw,
   Router,
+  Save,
   Search,
   Server,
   ShieldCheck,
@@ -34,6 +38,12 @@ const PS3_PATHS = [
   { label: "PSX", path: "/dev_hdd0/PSXISO/", hint: "PS1 BIN/CUE or ISO" },
   { label: "PSP", path: "/dev_hdd0/PSPISO/", hint: "PSP ISO games" }
 ];
+
+const PROFILE_STORAGE_KEY = "jgv.ps3Profiles";
+const SETTINGS_STORAGE_KEY = "jgv.settings";
+const DEFAULT_SETTINGS = {
+  refreshAfterUpload: false
+};
 
 const SAMPLE_LOCAL = [
   folder("Homebrew", "2026-06-03T15:28:00Z"),
@@ -94,6 +104,12 @@ function createMockApi() {
     },
     async pickLocalKeyFile() {
       const entry = file("selected_ps3_backup.key", "KEY", 16, new Date().toISOString());
+      return { ...entry, path: `C:\\Backups\\${entry.name}` };
+    },
+    async findMatchingKeyFile(isoPath) {
+      const isoName = fileNameFromPath(isoPath);
+      const keyName = isoName.replace(/\.iso$/i, ".key");
+      const entry = file(keyName, "KEY", 16, new Date().toISOString());
       return { ...entry, path: `C:\\Backups\\${entry.name}` };
     },
     getDroppedFilePath(fileItem) {
@@ -181,6 +197,10 @@ function App() {
   const [queue, setQueue] = useState([]);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
+  const [profiles, setProfiles] = useState(() => readStoredProfiles());
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [settings, setSettings] = useState(() => readStoredSettings());
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [keyPairCandidate, setKeyPairCandidate] = useState(null);
   const [remoteDragActive, setRemoteDragActive] = useState(false);
@@ -277,6 +297,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    writeStoredProfiles(profiles);
+  }, [profiles]);
+
+  useEffect(() => {
+    writeStoredSettings(settings);
+  }, [settings]);
+
+  useEffect(() => {
     if (!window.vaultAPI) return undefined;
 
     const timer = setInterval(async () => {
@@ -307,6 +335,18 @@ function App() {
       null
     );
   }, [queue]);
+  const doctorReport = useMemo(
+    () =>
+      buildVaultDoctorReport({
+        localEntries: local.entries,
+        remoteEntries: remote.entries,
+        remotePath: remote.path,
+        selectedLocalEntry,
+        selectedRemoteEntry,
+        queue
+      }),
+    [local.entries, queue, remote.entries, remote.path, selectedLocalEntry, selectedRemoteEntry]
+  );
 
   async function connect() {
     setBusy(true);
@@ -329,6 +369,75 @@ function App() {
     setConnection((current) => ({ ...current, connected: false }));
     setStatus("Disconnected.");
     pushEvent("info", "Disconnected.");
+  }
+
+  function applyProfile(profileId) {
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) {
+      setSelectedProfileId("");
+      setProfileName("");
+      return;
+    }
+
+    setSelectedProfileId(profile.id);
+    setProfileName(profile.name);
+    setConnection((current) => ({
+      ...current,
+      host: profile.host,
+      port: profile.port || "21",
+      username: profile.username || "anonymous",
+      password: profile.password || ""
+    }));
+    setStatus(`Loaded profile: ${profile.name}.`);
+  }
+
+  function saveProfile() {
+    const host = connection.host.trim();
+    if (!host) {
+      setStatus("Enter a PS3 IP address before saving a profile.");
+      pushEvent("warn", "Profile save skipped because no PS3 IP address is set.");
+      return;
+    }
+
+    const name = profileName.trim() || host;
+    const id = selectedProfileId || `profile-${Date.now()}`;
+    const profile = {
+      id,
+      name,
+      host,
+      port: connection.port || "21",
+      username: connection.username || "anonymous",
+      password: connection.password || ""
+    };
+
+    setProfiles((items) => {
+      const next = items.filter((item) => item.id !== id);
+      return [...next, profile].sort((a, b) => a.name.localeCompare(b.name));
+    });
+    setSelectedProfileId(id);
+    setProfileName(name);
+    setStatus(`Saved PS3 profile: ${name}.`);
+    pushEvent("success", `Saved PS3 profile: ${name}.`);
+  }
+
+  function deleteProfile() {
+    if (!selectedProfileId) {
+      setStatus("Select a saved profile before deleting one.");
+      return;
+    }
+    const profile = profiles.find((item) => item.id === selectedProfileId);
+    setProfiles((items) => items.filter((item) => item.id !== selectedProfileId));
+    setSelectedProfileId("");
+    setProfileName("");
+    setStatus(profile ? `Deleted profile: ${profile.name}.` : "Deleted saved profile.");
+  }
+
+  async function runVaultDoctor() {
+    const needsAttention = doctorReport.issues.filter((issue) => issue.severity !== "ok").length;
+    setStatus(needsAttention ? `Vault Doctor found ${needsAttention} item(s) to check.` : "Vault Doctor found no issues in this view.");
+    pushEvent(needsAttention ? "warn" : "success", needsAttention ? `Vault Doctor found ${needsAttention} item(s) to check.` : "Vault Doctor found no issues.");
+    await refreshLocal(local.path);
+    await refreshRemote(remote.path);
   }
 
   async function chooseLocalFolder() {
@@ -391,7 +500,11 @@ function App() {
       return;
     }
 
-    const keyPairPrompt = promptForIsoKey ? getIsoKeyPairPrompt(files) : null;
+    const autoMatch = promptForIsoKey ? await withAutoMatchedKeys(files) : { files, candidate: null };
+    const filesForUpload = autoMatch.files;
+    const keyPairPrompt = promptForIsoKey && isPs3IsoTarget(remote.path)
+      ? autoMatch.candidate || getIsoKeyPairPrompt(filesForUpload)
+      : null;
     if (keyPairPrompt) {
       setKeyPairCandidate(keyPairPrompt);
       setStatus(`Pair a key with ${keyPairPrompt.isoEntry.name} before uploading, or upload the ISO only.`);
@@ -399,9 +512,10 @@ function App() {
       return;
     }
 
-    const queuedFiles = prepareUploadJobs(files);
+    const queuedFiles = prepareUploadJobs(filesForUpload);
     const uploadedJobs = [];
-    const shouldVerifyIsoKeys = queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
+    let failedUploads = 0;
+    const shouldVerifyIsoKeys = isPs3IsoTarget(remote.path) && queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
 
     setQueue((items) => [
       ...queuedFiles.map(({ entry, id, remoteName, note }) => ({
@@ -443,6 +557,7 @@ function App() {
         );
         setStatus(`Transfer complete: ${entry.name}`);
       } catch (error) {
+        failedUploads += 1;
         setQueue((items) =>
           items.map((item) => (item.id === id ? { ...item, status: "Failed", error: error.message } : item))
         );
@@ -459,6 +574,33 @@ function App() {
     }
 
     await refreshRemote(remote.path);
+
+    if (uploadedJobs.length > 0 && failedUploads === 0 && settings.refreshAfterUpload) {
+      await runWebmanAction("refresh");
+    }
+  }
+
+  async function withAutoMatchedKeys(files) {
+    if (!isPs3IsoTarget(remote.path)) return { files, candidate: null };
+
+    const nextFiles = [...files];
+    const autoMatches = [];
+    for (const isoEntry of files.filter((entry) => isPs3IsoFile(entry.name))) {
+      const alreadyHasKey = nextFiles.some((entry) => isPs3IsoKeyFile(entry.name) && isIsoKeyMatch(isoEntry, entry));
+      if (alreadyHasKey) continue;
+
+      const nearbyKey = findMatchingKeyInEntries(isoEntry, local.entries) || await api.findMatchingKeyFile?.(isoEntry.path);
+      if (!nearbyKey) continue;
+
+      nextFiles.push(nearbyKey);
+      autoMatches.push({ isoEntry, keyEntry: nearbyKey, autoMatched: true });
+      pushEvent("success", `Auto-found matching key for ${isoEntry.name}: ${nearbyKey.name}.`);
+    }
+
+    return {
+      files: nextFiles,
+      candidate: files.filter((entry) => isPs3IsoFile(entry.name)).length === 1 && autoMatches.length === 1 ? autoMatches[0] : null
+    };
   }
 
   async function verifyUploadedIsoKeys(uploadedJobs) {
@@ -604,6 +746,16 @@ function App() {
     }
   }
 
+  async function selectRemotePath(targetPath) {
+    const normalizedPath = normalizeRemotePathText(targetPath);
+    setRemote((current) => ({
+      ...current,
+      path: normalizedPath,
+      parent: remoteParentPath(normalizedPath)
+    }));
+    await refreshRemote(normalizedPath);
+  }
+
   function useDirectLanPreset() {
     setConnection((current) => ({
       ...current,
@@ -617,7 +769,7 @@ function App() {
   }
 
   function clearCompleted() {
-    setQueue((items) => items.filter((item) => item.status !== "Completed"));
+    setQueue((items) => items.filter((item) => !["Completed", "Verified"].includes(item.status)));
   }
 
   return (
@@ -636,6 +788,18 @@ function App() {
           <span>FTP</span>
         </div>
       </header>
+
+      <ProfileBar
+        profiles={profiles}
+        selectedProfileId={selectedProfileId}
+        profileName={profileName}
+        refreshAfterUpload={settings.refreshAfterUpload}
+        onSelectProfile={applyProfile}
+        onProfileNameChange={setProfileName}
+        onSaveProfile={saveProfile}
+        onDeleteProfile={deleteProfile}
+        onRefreshAfterUploadChange={(refreshAfterUpload) => setSettings((current) => ({ ...current, refreshAfterUpload }))}
+      />
 
       <section className="connection-bar" aria-label="PS3 FTP connection">
         <LabeledInput
@@ -709,10 +873,10 @@ function App() {
           selectedPath={selectedRemote}
           selectedEntry={selectedRemoteEntry}
           onSelect={setSelectedRemote}
-          onOpen={(entry) => entry.isDirectory && refreshRemote(entry.path)}
-          onUp={() => remote.parent && refreshRemote(remote.parent)}
+          onOpen={(entry) => entry.isDirectory && selectRemotePath(entry.path)}
+          onUp={() => remote.parent && selectRemotePath(remote.parent)}
           onRefresh={() => refreshRemote(remote.path)}
-          onHome={() => refreshRemote("/dev_hdd0/")}
+          onHome={() => selectRemotePath("/dev_hdd0/")}
           footer={connection.connected || !window.vaultAPI ? `${remote.entries.length} remote items` : "Connect to browse PS3"}
           dropEnabled
           dragActive={remoteDragActive}
@@ -744,7 +908,7 @@ function App() {
                   className={remote.path === item.path ? "path-button active" : "path-button"}
                   type="button"
                   key={item.path}
-                  onClick={() => refreshRemote(item.path)}
+                  onClick={() => selectRemotePath(item.path)}
                 >
                   <Folder size={18} />
                   <span>
@@ -779,6 +943,8 @@ function App() {
           </div>
         </aside>
       </section>
+
+      <VaultDoctor report={doctorReport} onRun={runVaultDoctor} />
 
       <section className="queue-panel" aria-label="Transfer queue">
         <div className="queue-header">
@@ -836,6 +1002,90 @@ function LabeledInput({ label, value, onChange, small = false, type = "text", pl
       <span>{label}</span>
       <input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </label>
+  );
+}
+
+function ProfileBar({
+  profiles,
+  selectedProfileId,
+  profileName,
+  refreshAfterUpload,
+  onSelectProfile,
+  onProfileNameChange,
+  onSaveProfile,
+  onDeleteProfile,
+  onRefreshAfterUploadChange
+}) {
+  return (
+    <section className="profile-bar" aria-label="Saved PS3 profiles and transfer options">
+      <label className="profile-field">
+        <span>Saved PS3</span>
+        <select value={selectedProfileId} onChange={(event) => onSelectProfile(event.target.value)}>
+          <option value="">New profile</option>
+          {profiles.map((profile) => (
+            <option value={profile.id} key={profile.id}>
+              {profile.name} ({profile.host})
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="profile-field name">
+        <span>Profile Name</span>
+        <input value={profileName} placeholder="Office PS3" onChange={(event) => onProfileNameChange(event.target.value)} />
+      </label>
+      <button className="button secondary" type="button" onClick={onSaveProfile}>
+        <Save size={16} />
+        Save Profile
+      </button>
+      <button className="button secondary" type="button" onClick={onDeleteProfile} disabled={!selectedProfileId}>
+        <Trash2 size={16} />
+        Delete Profile
+      </button>
+      <label className="toggle-option">
+        <input
+          type="checkbox"
+          checked={refreshAfterUpload}
+          onChange={(event) => onRefreshAfterUploadChange(event.target.checked)}
+        />
+        <span>Refresh XML after successful uploads</span>
+      </label>
+    </section>
+  );
+}
+
+function VaultDoctor({ report, onRun }) {
+  const icon = report.needsAttention > 0 ? <AlertTriangle size={18} /> : <BadgeCheck size={18} />;
+  const topIssues = report.issues.slice(0, 4);
+
+  return (
+    <section className={`doctor-panel ${report.needsAttention > 0 ? "warn" : "ok"}`} aria-label="Vault Doctor diagnostics">
+      <div className="doctor-summary">
+        <div className="doctor-title">
+          <span className="doctor-icon">{icon}</span>
+          <div>
+            <h2>Vault Doctor</h2>
+            <p>{report.summary}</p>
+          </div>
+        </div>
+        <div className="doctor-stats">
+          <span><strong>{report.ready}</strong> Ready</span>
+          <span><strong>{report.needsAttention}</strong> Check</span>
+          <span><strong>{report.issues.length}</strong> Findings</span>
+        </div>
+        <button className="button secondary" type="button" onClick={onRun}>
+          <ClipboardCheck size={16} />
+          Scan
+        </button>
+      </div>
+      <div className="doctor-findings">
+        {topIssues.map((issue) => (
+          <div className={`doctor-finding ${issue.severity}`} key={issue.id}>
+            <strong>{issue.title}</strong>
+            <span>{issue.detail}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1159,7 +1409,11 @@ function KeyPairDialog({ candidate, onChooseKey, onUploadIsoOnly, onCancel, onCo
         </div>
         <div className="confirm-copy">
           <h2 id="key-pair-title">Pair PS3 ISO Key</h2>
-          <p>Select the matching `.key` or `.dkey` file. The key name must match the ISO spelling exactly.</p>
+          <p>
+            {candidate.autoMatched
+              ? "A matching key was found beside the ISO. Confirm the pair before upload."
+              : "Select the matching `.key` or `.dkey` file. The key name must match the ISO spelling exactly."}
+          </p>
           <div className="pair-check">
             <span>ISO</span>
             <code>{candidate.isoEntry.name}</code>
@@ -1240,6 +1494,184 @@ function expectedKeyNamesForIso(isoName) {
 function isIsoKeyMatch(isoEntry, keyEntry) {
   if (!isoEntry || !keyEntry) return false;
   return expectedKeyNamesForIso(isoEntry.name).includes(keyEntry.name);
+}
+
+function findMatchingKeyInEntries(isoEntry, entries) {
+  if (!isoEntry || !isPs3IsoFile(isoEntry.name)) return null;
+  const expectedNames = expectedKeyNamesForIso(isoEntry.name);
+  return entries.find((entry) => !entry.isDirectory && expectedNames.includes(entry.name)) || null;
+}
+
+function isPs3IsoTarget(remotePath) {
+  return normalizeRemotePathText(remotePath).toLowerCase() === "/dev_hdd0/ps3iso/";
+}
+
+function normalizeRemotePathText(remotePath) {
+  if (!remotePath) return "/";
+  const normalized = remotePath.replace(/\\/g, "/").replace(/\/+/g, "/");
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function remoteParentPath(remotePath) {
+  const normalized = normalizeRemotePathText(remotePath);
+  if (normalized === "/") return null;
+  const trimmed = normalized.slice(0, -1);
+  const slashIndex = trimmed.lastIndexOf("/");
+  if (slashIndex <= 0) return "/";
+  return `${trimmed.slice(0, slashIndex)}/`;
+}
+
+function isLikelyIsoKeySize(size) {
+  return Number(size) > 0 && Number(size) <= 64;
+}
+
+function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, selectedLocalEntry, queue }) {
+  const issues = [];
+  const readyItems = new Set();
+  const localFiles = localEntries.filter((entry) => !entry.isDirectory);
+  const remoteFiles = remoteEntries.filter((entry) => !entry.isDirectory);
+  const remoteByName = new Map(remoteFiles.map((entry) => [entry.name, entry]));
+  const localByName = new Map(localFiles.map((entry) => [entry.name, entry]));
+  const ps3Target = isPs3IsoTarget(remotePath);
+
+  const addIssue = (severity, title, detail) => {
+    issues.push({
+      id: `${severity}-${issues.length}-${title}`,
+      severity,
+      title,
+      detail
+    });
+  };
+
+  for (const localFile of localFiles) {
+    const remoteFile = remoteByName.get(localFile.name);
+    if (!remoteFile) continue;
+    if (localFile.size && remoteFile.size && localFile.size !== remoteFile.size) {
+      addIssue("warn", "Size mismatch", `${localFile.name} exists locally and on the PS3, but the sizes differ.`);
+    } else {
+      readyItems.add(localFile.name);
+      addIssue("ok", "Already on PS3", `${localFile.name} is present locally and remotely with a matching size.`);
+    }
+  }
+
+  if (ps3Target) {
+    const remoteIsos = remoteFiles.filter((entry) => isPs3IsoFile(entry.name));
+    const remoteKeys = remoteFiles.filter((entry) => isPs3IsoKeyFile(entry.name));
+    const localIsos = localFiles.filter((entry) => isPs3IsoFile(entry.name));
+    const localKeys = localFiles.filter((entry) => isPs3IsoKeyFile(entry.name));
+
+    for (const iso of remoteIsos) {
+      const key = findMatchingKeyInEntries(iso, remoteFiles);
+      if (!key) {
+        addIssue("error", "Remote PS3 ISO missing key", `${iso.name} needs ${expectedKeyNamesForIso(iso.name).join(" or ")} beside it.`);
+      } else if (!isLikelyIsoKeySize(key.size)) {
+        addIssue("warn", "Unusual key size", `${key.name} is ${formatBytes(key.size) || "0 B"}; PS3 ISO keys are usually tiny.`);
+      } else {
+        readyItems.add(iso.name);
+        addIssue("ok", "Remote ISO/key ready", `${iso.name} has ${key.name} in the PS3ISO folder.`);
+      }
+    }
+
+    for (const key of remoteKeys) {
+      const isoName = `${baseNameWithoutExtension(key.name)}.iso`;
+      if (!remoteByName.has(isoName)) {
+        addIssue("warn", "Remote key without ISO", `${key.name} has no matching ${isoName} in this PS3 folder.`);
+      }
+    }
+
+    for (const iso of localIsos) {
+      const key = findMatchingKeyInEntries(iso, localFiles);
+      if (!key) {
+        addIssue("warn", "Local PS3 ISO missing key", `${iso.name} has no same-name .key or .dkey in the local folder.`);
+      } else if (!isLikelyIsoKeySize(key.size)) {
+        addIssue("warn", "Local key size looks odd", `${key.name} is ${formatBytes(key.size) || "0 B"}; check that it is the disc key.`);
+      }
+    }
+
+    for (const key of localKeys) {
+      const isoName = `${baseNameWithoutExtension(key.name)}.iso`;
+      if (!localByName.has(isoName)) {
+        addIssue("warn", "Local key without ISO", `${key.name} has no matching local ${isoName}.`);
+      }
+    }
+  } else {
+    const selectedHasPs3Key = selectedLocalEntry && (
+      isPs3IsoKeyFile(selectedLocalEntry.name) ||
+      (isPs3IsoFile(selectedLocalEntry.name) && Boolean(findMatchingKeyInEntries(selectedLocalEntry, localFiles)))
+    );
+    if (selectedHasPs3Key) {
+      addIssue("warn", "Wrong target folder risk", `${selectedLocalEntry.name} looks like PS3 ISO/key work, but the active PS3 folder is ${remotePath}.`);
+    }
+  }
+
+  for (const item of queue) {
+    if (item.status === "Failed") {
+      addIssue("error", "Failed queue item", `${fileNameFromPath(item.source)} failed: ${item.error || "check the live log"}.`);
+    }
+  }
+
+  if (issues.length === 0) {
+    addIssue("ok", "Current view looks clean", "No obvious key, duplicate, size, or target-folder problems found.");
+  }
+
+  const needsAttention = issues.filter((issue) => issue.severity !== "ok").length;
+  const summary = needsAttention
+    ? `${needsAttention} thing${needsAttention === 1 ? "" : "s"} need attention in this local/remote view.`
+    : "No obvious vault problems in this local/remote view.";
+
+  return {
+    issues: issues.sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
+    needsAttention,
+    ready: readyItems.size,
+    summary
+  };
+}
+
+function severityRank(severity) {
+  return { error: 3, warn: 2, ok: 1 }[severity] || 0;
+}
+
+function readStoredProfiles() {
+  if (typeof window.localStorage === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PROFILE_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item?.id && item?.host)
+      .map((item) => ({
+        id: String(item.id),
+        name: String(item.name || item.host),
+        host: String(item.host),
+        port: String(item.port || "21"),
+        username: String(item.username || "anonymous"),
+        password: String(item.password || "")
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredProfiles(profiles) {
+  if (typeof window.localStorage === "undefined") return;
+  window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+function readStoredSettings() {
+  if (typeof window.localStorage === "undefined") return DEFAULT_SETTINGS;
+  try {
+    return {
+      ...DEFAULT_SETTINGS,
+      ...JSON.parse(window.localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}")
+    };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function writeStoredSettings(settings) {
+  if (typeof window.localStorage === "undefined") return;
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 }
 
 function fileNameFromPath(value) {
