@@ -5,6 +5,7 @@ releases/
 artifacts*/
 
 *.log
+*.pid
 *.tmp
 
 *.iso

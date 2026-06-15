@@ -607,6 +607,7 @@ function App() {
           onRefresh={() => refreshLocal(local.path)}
           onHome={() => refreshLocal()}
           footer={`${local.entries.length} items`}
+          emptyPathText="Choose a local folder or files"
           action={<button className="icon-button" type="button" title="Choose local folder" onClick={chooseLocalFolder}><HardDrive size={17} /></button>}
         />
 
@@ -750,6 +751,7 @@ function FilePane({
   title,
   tone,
   pathText,
+  emptyPathText = "Loading...",
   parent,
   entries,
   selectedPath,
@@ -805,7 +807,7 @@ function FilePane({
         <button className="icon-button" type="button" title="Up" onClick={onUp} disabled={!parent}>
           <Upload size={16} />
         </button>
-        <div className="breadcrumb" title={pathText}>{pathText || "Loading..."}</div>
+        <div className="breadcrumb" title={pathText || emptyPathText}>{pathText || emptyPathText}</div>
         <button className="icon-button" type="button" title="Refresh" onClick={onRefresh}>
           <RefreshCw size={16} />
         </button>
