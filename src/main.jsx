@@ -112,11 +112,23 @@ function createMockApi() {
     },
     async uploadToRemote(payload) {
       await wait(900);
+      const remoteName = payload.remoteName || payload.localPath.split("\\").pop();
       return {
         id: payload.id,
-        remotePath: `${payload.remoteDir}${payload.localPath.split("\\").pop()}`,
+        remotePath: `${payload.remoteDir}${remoteName}`,
+        remoteName,
         bytes: 42_000_000,
         elapsedMs: 900
+      };
+    },
+    async verifyIsoKeyPair(payload) {
+      await wait(200);
+      return {
+        ok: true,
+        remoteDir: payload.remoteDir,
+        iso: { name: payload.isoName, size: payload.expectedIsoBytes, sizeMatches: true },
+        key: { name: payload.isoName.replace(/\.iso$/i, ".key"), size: 16 },
+        expectedKeyNames: [payload.isoName.replace(/\.iso$/i, ".key"), payload.isoName.replace(/\.iso$/i, ".dkey")]
       };
     },
     async deleteRemote(payload) {
@@ -370,33 +382,35 @@ function App() {
       return;
     }
 
-    const queuedFiles = files.map((entry, index) => ({
-      entry,
-      id: `${Date.now()}-${index}-${entry.name}`
-    }));
+    const queuedFiles = prepareUploadJobs(files);
+    const uploadedJobs = [];
+    const shouldVerifyIsoKeys = queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
 
     setQueue((items) => [
-      ...queuedFiles.map(({ entry, id }) => ({
+      ...queuedFiles.map(({ entry, id, remoteName, note }) => ({
         id,
-        operation: "Transfer to PS3",
+        operation: isPs3IsoKeyFile(remoteName) ? "Transfer PS3 key" : "Transfer to PS3",
         source: entry.path,
-        destination: `${remote.path}${entry.name}`,
+        destination: `${remote.path}${remoteName}`,
         size: entry.size,
         progress: 0,
         status: "Queued",
+        note,
         elapsedMs: 0
       })),
       ...items
     ]);
 
-    for (const { entry, id } of queuedFiles) {
-      setStatus(`Uploading ${entry.name} to ${remote.path}`);
+    for (const { entry, id, remoteName } of queuedFiles) {
+      setStatus(`Uploading ${entry.name} to ${remote.path}${remoteName}`);
       try {
         const result = await api.uploadToRemote({
           id,
           localPath: entry.path,
-          remoteDir: remote.path
+          remoteDir: remote.path,
+          remoteName
         });
+        uploadedJobs.push({ entry, id, remoteName, result });
         setQueue((items) =>
           items.map((item) =>
             item.id === id
@@ -423,7 +437,36 @@ function App() {
       }
     }
 
+    if (shouldVerifyIsoKeys) {
+      await verifyUploadedIsoKeys(uploadedJobs);
+    }
+
     await refreshRemote(remote.path);
+  }
+
+  async function verifyUploadedIsoKeys(uploadedJobs) {
+    const isoJobs = uploadedJobs.filter((job) => isPs3IsoFile(job.remoteName));
+    for (const job of isoJobs) {
+      try {
+        const result = await api.verifyIsoKeyPair({
+          remoteDir: remote.path,
+          isoName: job.remoteName,
+          expectedIsoBytes: job.entry.size
+        });
+        if (result.ok) {
+          setQueue((items) => items.map((item) => (item.id === job.id ? { ...item, status: "Verified" } : item)));
+          setStatus(`ISO/key check passed: ${job.remoteName} + ${result.key.name}`);
+          pushEvent("success", `ISO/key check passed for ${job.remoteName}.`);
+        } else {
+          const missing = result.key ? "ISO size mismatch" : `Missing ${result.expectedKeyNames.join(" or ")}`;
+          setStatus(`ISO/key check needs attention: ${missing}`);
+          pushEvent("warn", `ISO/key check needs attention for ${job.remoteName}: ${missing}.`);
+        }
+      } catch (error) {
+        setStatus(`ISO/key check failed: ${error.message}`);
+        pushEvent("error", `ISO/key check failed for ${job.remoteName}: ${error.message}`);
+      }
+    }
   }
 
   function requestDeleteRemote() {
@@ -920,7 +963,7 @@ function QueueTable({ items }) {
             </span>
             <strong>{item.progress}%</strong>
             <small>
-              {item.bytesTransferred ? `${formatBytes(item.bytesTransferred)} copied` : "Waiting"}
+              {item.note || (item.bytesTransferred ? `${formatBytes(item.bytesTransferred)} copied` : "Waiting")}
               {item.bytesPerSecond ? ` at ${formatBytes(item.bytesPerSecond)}/s` : ""}
               {item.remainingMs ? `, ${formatDuration(item.remainingMs)} left` : ""}
             </small>
@@ -950,6 +993,39 @@ function LiveLog({ events }) {
       </div>
     </section>
   );
+}
+
+function prepareUploadJobs(files) {
+  const createdAt = Date.now();
+  const isoEntries = files.filter((entry) => isPs3IsoFile(entry.name));
+  const keyEntries = files.filter((entry) => isPs3IsoKeyFile(entry.name));
+  const isoByBase = new Map(isoEntries.map((entry) => [baseNameWithoutExtension(entry.name), entry]));
+
+  return files.map((entry, index) => {
+    let remoteName = entry.name;
+    let note = "";
+
+    if (isPs3IsoKeyFile(entry.name)) {
+      const keyExt = extensionFromName(entry.name);
+      const keyBase = baseNameWithoutExtension(entry.name);
+      const keyBaseWithoutCopySuffix = keyBase.replace(/ \(\d+\)$/u, "");
+
+      if (!isoByBase.has(keyBase) && isoByBase.has(keyBaseWithoutCopySuffix)) {
+        remoteName = `${keyBaseWithoutCopySuffix}${keyExt}`;
+        note = `Pairs as ${remoteName}`;
+      } else if (!isoByBase.has(keyBase) && isoEntries.length === 1 && keyEntries.length === 1) {
+        remoteName = `${baseNameWithoutExtension(isoEntries[0].name)}${keyExt}`;
+        note = `Pairs as ${remoteName}`;
+      }
+    }
+
+    return {
+      entry,
+      id: `${createdAt}-${index}-${entry.name}`,
+      remoteName,
+      note
+    };
+  });
 }
 
 function StatusBar({ connection, activeTransfer, status, lastProgressAt, nowMs }) {
@@ -1030,10 +1106,29 @@ function fileTypeFromName(fileName) {
     cue: "CUE",
     pkg: "PKG",
     rap: "RAP",
+    key: "KEY",
+    dkey: "DKEY",
     sprx: "SPRX",
     self: "SELF"
   };
   return labels[ext] || "File";
+}
+
+function extensionFromName(fileName) {
+  const match = fileName.match(/(\.[^.]+)$/u);
+  return match ? match[1] : "";
+}
+
+function baseNameWithoutExtension(fileName) {
+  return fileName.replace(/\.[^.]+$/u, "");
+}
+
+function isPs3IsoFile(fileName) {
+  return extensionFromName(fileName).toLowerCase() === ".iso";
+}
+
+function isPs3IsoKeyFile(fileName) {
+  return [".key", ".dkey"].includes(extensionFromName(fileName).toLowerCase());
 }
 
 function fileNameFromPath(value) {

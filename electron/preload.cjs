@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("vaultAPI", {
   ftpStatus: () => ipcRenderer.invoke("ftp:status"),
   listRemote: (remotePath) => ipcRenderer.invoke("ftp:list", remotePath),
   uploadToRemote: (payload) => ipcRenderer.invoke("ftp:upload", payload),
+  verifyIsoKeyPair: (payload) => ipcRenderer.invoke("ftp:verify-iso-key-pair", payload),
   deleteRemote: (payload) => ipcRenderer.invoke("ftp:delete", payload),
   runSpeedTest: (payload) => ipcRenderer.invoke("ftp:speed-test", payload),
   webmanAction: (action) => ipcRenderer.invoke("webman:action", action),

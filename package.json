@@ -1,6 +1,6 @@
 {
   "name": "jesters-game-vault",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "A PS3-focused WinSCP-style FTP vault for owned backups and homebrew.",

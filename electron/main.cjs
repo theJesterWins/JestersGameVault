@@ -105,6 +105,8 @@ function fileTypeLabel(fileName) {
     ".cue": "CUE",
     ".pkg": "PKG",
     ".rap": "RAP",
+    ".key": "KEY",
+    ".dkey": "DKEY",
     ".sfo": "SFO",
     ".sprx": "SPRX",
     ".txt": "Text"
@@ -137,6 +139,15 @@ function normalizeRemoteEntryPath(targetPath) {
 
 function joinRemote(remoteDir, fileName) {
   return path.posix.join(normalizeRemotePath(remoteDir), fileName).replace(/\\/g, "/");
+}
+
+function remoteFileNameFromPayload(payload) {
+  const requestedName = payload.remoteName || path.basename(payload.localPath);
+  const cleanName = path.posix.basename(String(requestedName).replace(/\\/g, "/"));
+  if (!cleanName || cleanName === "." || cleanName === "..") {
+    throw new Error("Remote file name is invalid.");
+  }
+  return cleanName;
 }
 
 async function ensureConnected() {
@@ -212,7 +223,7 @@ ipcMain.handle("local:pick-files", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openFile", "multiSelections"],
     filters: [
-      { name: "PS3 backups and homebrew", extensions: ["iso", "bin", "cue", "pkg", "rap", "sprx", "self"] },
+      { name: "PS3 backups, keys, and homebrew", extensions: ["iso", "key", "dkey", "bin", "cue", "pkg", "rap", "sprx", "self"] },
       { name: "All files", extensions: ["*"] }
     ]
   });
@@ -312,8 +323,8 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
 
   const transferId = payload.id || `${Date.now()}-${path.basename(payload.localPath)}`;
   const remoteDir = normalizeRemotePath(payload.remoteDir);
-  const remotePath = joinRemote(remoteDir, path.basename(payload.localPath));
-  const remoteFileName = path.basename(payload.localPath);
+  const remoteFileName = remoteFileNameFromPayload(payload);
+  const remotePath = joinRemote(remoteDir, remoteFileName);
   const startedAt = Date.now();
   const emitProgress = createTransferProgressEmitter(transferId, stat.size, startedAt);
   let pollClient;
@@ -354,7 +365,7 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
     pollClient = undefined;
   };
 
-  emitVaultEvent("info", `Upload started: ${path.basename(payload.localPath)} -> ${remoteDir}.`, {
+  emitVaultEvent("info", `Upload started: ${path.basename(payload.localPath)} -> ${remotePath}.`, {
     transferId,
     localPath: payload.localPath,
     remotePath,
@@ -394,8 +405,48 @@ ipcMain.handle("ftp:upload", async (_event, payload) => runFtpTask("Upload", asy
   return {
     id: transferId,
     remotePath,
+    remoteName: remoteFileName,
     bytes: stat.size,
     elapsedMs: Date.now() - startedAt
+  };
+}));
+
+ipcMain.handle("ftp:verify-iso-key-pair", async (_event, payload) => runFtpTask("ISO/key verification", async () => {
+  await ensureConnected();
+
+  const remoteDir = normalizeRemotePath(payload.remoteDir);
+  const isoName = path.posix.basename(String(payload.isoName || "").replace(/\\/g, "/"));
+  if (!isoName.toLowerCase().endsWith(".iso")) {
+    throw new Error("Verification requires a PS3 ISO file name.");
+  }
+
+  const expectedIsoBytes = Number(payload.expectedIsoBytes || 0);
+  const baseName = isoName.slice(0, -4);
+  const keyNames = [`${baseName}.key`, `${baseName}.dkey`];
+  const entries = await ftpClient.list(remoteDir);
+  const isoEntry = entries.find((entry) => entry.name === isoName);
+  const keyEntry = entries.find((entry) => keyNames.includes(entry.name));
+  const isoSizeMatches = Boolean(isoEntry && (!expectedIsoBytes || isoEntry.size === expectedIsoBytes));
+  const ok = Boolean(isoEntry && keyEntry && isoSizeMatches);
+
+  emitVaultEvent(ok ? "success" : "warn", ok
+    ? `ISO/key verification passed for ${isoName}.`
+    : `ISO/key verification needs attention for ${isoName}.`, {
+    remoteDir,
+    isoName,
+    isoBytes: isoEntry?.size || 0,
+    expectedIsoBytes,
+    keyName: keyEntry?.name || null,
+    keyBytes: keyEntry?.size || 0,
+    isoSizeMatches
+  });
+
+  return {
+    ok,
+    remoteDir,
+    iso: isoEntry ? { name: isoEntry.name, size: isoEntry.size, sizeMatches: isoSizeMatches } : null,
+    key: keyEntry ? { name: keyEntry.name, size: keyEntry.size } : null,
+    expectedKeyNames: keyNames
   };
 }));
 
