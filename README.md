@@ -41,6 +41,22 @@ The GitHub beta zip is written to `artifacts/github-beta/`. It contains a portab
 
 For Windows trust and publisher identity, see [docs/windows-signing.md](docs/windows-signing.md).
 
+## Install Linux release
+
+Download the `.flatpak` bundle from the latest GitHub release, then run:
+
+```bash
+flatpak install --user ./JestersGameVault-Beta-0.1.4-linux-x86_64.flatpak
+flatpak run io.github.thejesterwins.JestersGameVault
+```
+
+On Arch Linux or EndeavourOS, install Flatpak first:
+
+```bash
+sudo pacman -S flatpak
+flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+```
+
 ## Build Linux Flatpak and tarball
 
 Linux builds are intended to work across distributions, including Arch Linux, through Flatpak. See [docs/linux-flatpak.md](docs/linux-flatpak.md).
