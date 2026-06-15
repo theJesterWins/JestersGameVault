@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("vaultAPI", {
   listLocal: (targetPath) => ipcRenderer.invoke("local:list", targetPath),
   pickLocalFolder: () => ipcRenderer.invoke("local:pick-folder"),
   pickLocalFiles: () => ipcRenderer.invoke("local:pick-files"),
+  pickLocalKeyFile: () => ipcRenderer.invoke("local:pick-key-file"),
   getDroppedFilePath: (file) => webUtils.getPathForFile(file),
   connectFtp: (config) => ipcRenderer.invoke("ftp:connect", config),
   disconnectFtp: () => ipcRenderer.invoke("ftp:disconnect"),

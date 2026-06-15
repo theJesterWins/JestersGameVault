@@ -967,6 +967,11 @@ button {
   padding: 18px;
 }
 
+.confirm-dialog.key-dialog {
+  width: min(680px, 100%);
+  border-color: rgba(82, 223, 209, 0.32);
+}
+
 .confirm-icon {
   width: 48px;
   height: 48px;
@@ -977,6 +982,18 @@ button {
   color: #ff8f8f;
   background: rgba(255, 107, 107, 0.12);
   border: 1px solid rgba(255, 107, 107, 0.22);
+}
+
+.confirm-icon.key-ok {
+  color: var(--green);
+  background: rgba(116, 226, 72, 0.12);
+  border-color: rgba(116, 226, 72, 0.22);
+}
+
+.confirm-icon.key-warn {
+  color: var(--gold);
+  background: rgba(244, 207, 74, 0.12);
+  border-color: rgba(244, 207, 74, 0.24);
 }
 
 .confirm-copy {
@@ -1012,11 +1029,61 @@ button {
   background: rgba(0, 0, 0, 0.24);
 }
 
+.pair-check {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.pair-check span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pair-check code {
+  margin-top: 0;
+  color: #dffaf6;
+}
+
+.pair-check code.mismatch {
+  color: #ffe16b;
+  border-color: rgba(244, 207, 74, 0.36);
+}
+
+.pair-result {
+  margin-top: 12px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.pair-result.ok {
+  color: #dbffd4;
+  border-color: rgba(116, 226, 72, 0.3);
+  background: rgba(116, 226, 72, 0.08);
+}
+
+.pair-result.warn {
+  color: #ffeaa0;
+  border-color: rgba(244, 207, 74, 0.3);
+  background: rgba(244, 207, 74, 0.08);
+}
+
 .confirm-actions {
   grid-column: 2;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.confirm-actions.key-actions {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 1180px) {

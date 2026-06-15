@@ -150,6 +150,18 @@ function remoteFileNameFromPayload(payload) {
   return cleanName;
 }
 
+async function localFileEntry(filePath) {
+  const stat = await fs.stat(filePath);
+  return {
+    name: path.basename(filePath),
+    path: filePath,
+    isDirectory: false,
+    size: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    type: fileTypeLabel(filePath)
+  };
+}
+
 async function ensureConnected() {
   if (ftpClient && !ftpClient.closed) {
     return;
@@ -230,20 +242,22 @@ ipcMain.handle("local:pick-files", async () => {
   if (result.canceled) return [];
 
   const entries = await Promise.all(
-    result.filePaths.map(async (filePath) => {
-      const stat = await fs.stat(filePath);
-      return {
-        name: path.basename(filePath),
-        path: filePath,
-        isDirectory: false,
-        size: stat.size,
-        modifiedAt: stat.mtime.toISOString(),
-        type: fileTypeLabel(filePath)
-      };
-    })
+    result.filePaths.map((filePath) => localFileEntry(filePath))
   );
 
   return entries;
+});
+
+ipcMain.handle("local:pick-key-file", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [
+      { name: "PS3 ISO keys", extensions: ["key", "dkey"] },
+      { name: "All files", extensions: ["*"] }
+    ]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return localFileEntry(result.filePaths[0]);
 });
 
 ipcMain.handle("ftp:connect", async (_event, config) => {

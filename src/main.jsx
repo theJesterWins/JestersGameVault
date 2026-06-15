@@ -87,7 +87,14 @@ function createMockApi() {
       return "";
     },
     async pickLocalFiles() {
-      return [];
+      return [file("selected_ps3_backup.iso", "ISO", 8_900_000_000, new Date().toISOString())].map((entry) => ({
+        ...entry,
+        path: `C:\\Backups\\${entry.name}`
+      }));
+    },
+    async pickLocalKeyFile() {
+      const entry = file("selected_ps3_backup.key", "KEY", 16, new Date().toISOString());
+      return { ...entry, path: `C:\\Backups\\${entry.name}` };
     },
     getDroppedFilePath(fileItem) {
       return fileItem.path || "";
@@ -175,6 +182,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState(null);
+  const [keyPairCandidate, setKeyPairCandidate] = useState(null);
   const [remoteDragActive, setRemoteDragActive] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -330,7 +338,7 @@ function App() {
 
   async function chooseAndUploadFiles() {
     const pickedFiles = await api.pickLocalFiles();
-    await uploadEntries(pickedFiles);
+    await uploadEntries(pickedFiles, { promptForIsoKey: true });
   }
 
   async function uploadDroppedFiles(event) {
@@ -356,7 +364,7 @@ function App() {
       return;
     }
 
-    await uploadEntries(entries);
+    await uploadEntries(entries, { promptForIsoKey: true });
   }
 
   async function transferSelected() {
@@ -365,10 +373,11 @@ function App() {
       return;
     }
 
-    await uploadEntries([selectedLocalEntry]);
+    await uploadEntries([selectedLocalEntry], { promptForIsoKey: true });
   }
 
-  async function uploadEntries(entries) {
+  async function uploadEntries(entries, options = {}) {
+    const { promptForIsoKey = false } = options;
     const files = entries.filter((entry) => entry?.path && !entry.isDirectory);
     if (files.length === 0) {
       setStatus("Choose one or more files to upload to the active PS3 folder.");
@@ -379,6 +388,14 @@ function App() {
     if (!connection.connected && window.vaultAPI) {
       setStatus("Connect to your PS3 before starting an FTP transfer.");
       pushEvent("warn", "Upload blocked because the PS3 FTP session is not connected.");
+      return;
+    }
+
+    const keyPairPrompt = promptForIsoKey ? getIsoKeyPairPrompt(files) : null;
+    if (keyPairPrompt) {
+      setKeyPairCandidate(keyPairPrompt);
+      setStatus(`Pair a key with ${keyPairPrompt.isoEntry.name} before uploading, or upload the ISO only.`);
+      pushEvent("info", `Pair key requested for ${keyPairPrompt.isoEntry.name}.`);
       return;
     }
 
@@ -467,6 +484,28 @@ function App() {
         pushEvent("error", `ISO/key check failed for ${job.remoteName}: ${error.message}`);
       }
     }
+  }
+
+  async function chooseKeyForPair() {
+    const keyEntry = await api.pickLocalKeyFile();
+    if (!keyEntry) return;
+    setKeyPairCandidate((current) => (current ? { ...current, keyEntry } : current));
+  }
+
+  async function uploadPairedIsoKey() {
+    if (!keyPairCandidate || !isIsoKeyMatch(keyPairCandidate.isoEntry, keyPairCandidate.keyEntry)) return;
+    const entries = [keyPairCandidate.isoEntry, keyPairCandidate.keyEntry];
+    setKeyPairCandidate(null);
+    await uploadEntries(entries, { promptForIsoKey: false });
+  }
+
+  async function uploadIsoWithoutKey() {
+    if (!keyPairCandidate) return;
+    const { isoEntry } = keyPairCandidate;
+    setKeyPairCandidate(null);
+    setStatus(`Uploading ${isoEntry.name} without a key.`);
+    pushEvent("warn", `Uploading ${isoEntry.name} without a paired key.`);
+    await uploadEntries([isoEntry], { promptForIsoKey: false });
   }
 
   function requestDeleteRemote() {
@@ -777,6 +816,16 @@ function App() {
           onConfirm={confirmDeleteRemote}
         />
       ) : null}
+
+      {keyPairCandidate ? (
+        <KeyPairDialog
+          candidate={keyPairCandidate}
+          onChooseKey={chooseKeyForPair}
+          onUploadIsoOnly={uploadIsoWithoutKey}
+          onCancel={() => setKeyPairCandidate(null)}
+          onConfirm={uploadPairedIsoKey}
+        />
+      ) : null}
     </main>
   );
 }
@@ -998,7 +1047,6 @@ function LiveLog({ events }) {
 function prepareUploadJobs(files) {
   const createdAt = Date.now();
   const isoEntries = files.filter((entry) => isPs3IsoFile(entry.name));
-  const keyEntries = files.filter((entry) => isPs3IsoKeyFile(entry.name));
   const isoByBase = new Map(isoEntries.map((entry) => [baseNameWithoutExtension(entry.name), entry]));
 
   return files.map((entry, index) => {
@@ -1006,16 +1054,9 @@ function prepareUploadJobs(files) {
     let note = "";
 
     if (isPs3IsoKeyFile(entry.name)) {
-      const keyExt = extensionFromName(entry.name);
       const keyBase = baseNameWithoutExtension(entry.name);
-      const keyBaseWithoutCopySuffix = keyBase.replace(/ \(\d+\)$/u, "");
-
-      if (!isoByBase.has(keyBase) && isoByBase.has(keyBaseWithoutCopySuffix)) {
-        remoteName = `${keyBaseWithoutCopySuffix}${keyExt}`;
-        note = `Pairs as ${remoteName}`;
-      } else if (!isoByBase.has(keyBase) && isoEntries.length === 1 && keyEntries.length === 1) {
-        remoteName = `${baseNameWithoutExtension(isoEntries[0].name)}${keyExt}`;
-        note = `Pairs as ${remoteName}`;
+      if (isoByBase.has(keyBase)) {
+        note = "Spelling OK";
       }
     }
 
@@ -1026,6 +1067,18 @@ function prepareUploadJobs(files) {
       note
     };
   });
+}
+
+function getIsoKeyPairPrompt(files) {
+  const isoEntries = files.filter((entry) => isPs3IsoFile(entry.name));
+  const keyEntries = files.filter((entry) => isPs3IsoKeyFile(entry.name));
+
+  if (isoEntries.length !== 1) return null;
+  if (keyEntries.length === 0) return { isoEntry: isoEntries[0], keyEntry: null };
+  if (keyEntries.length === 1 && !isIsoKeyMatch(isoEntries[0], keyEntries[0])) {
+    return { isoEntry: isoEntries[0], keyEntry: keyEntries[0] };
+  }
+  return null;
 }
 
 function StatusBar({ connection, activeTransfer, status, lastProgressAt, nowMs }) {
@@ -1092,6 +1145,54 @@ function ConfirmDeleteDialog({ entry, onCancel, onConfirm }) {
   );
 }
 
+function KeyPairDialog({ candidate, onChooseKey, onUploadIsoOnly, onCancel, onConfirm }) {
+  const expectedNames = expectedKeyNamesForIso(candidate.isoEntry.name);
+  const selectedKeyName = candidate.keyEntry?.name || "";
+  const hasKey = Boolean(candidate.keyEntry);
+  const matches = isIsoKeyMatch(candidate.isoEntry, candidate.keyEntry);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-dialog key-dialog" role="dialog" aria-modal="true" aria-labelledby="key-pair-title">
+        <div className={matches ? "confirm-icon key-ok" : "confirm-icon key-warn"}>
+          {matches ? <Check size={22} /> : <ShieldCheck size={22} />}
+        </div>
+        <div className="confirm-copy">
+          <h2 id="key-pair-title">Pair PS3 ISO Key</h2>
+          <p>Select the matching `.key` or `.dkey` file. The key name must match the ISO spelling exactly.</p>
+          <div className="pair-check">
+            <span>ISO</span>
+            <code>{candidate.isoEntry.name}</code>
+            <span>Expected key</span>
+            <code>{expectedNames.join(" or ")}</code>
+            <span>Selected key</span>
+            <code className={hasKey && !matches ? "mismatch" : ""}>{selectedKeyName || "No key selected"}</code>
+          </div>
+          <div className={matches ? "pair-result ok" : "pair-result warn"}>
+            {matches ? "Spelling check passed. This key will upload beside the ISO." : "Spelling check waiting for an exact filename match."}
+          </div>
+        </div>
+        <div className="confirm-actions key-actions">
+          <button className="button secondary" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="button secondary" type="button" onClick={onUploadIsoOnly}>
+            Upload ISO Only
+          </button>
+          <button className="button secondary" type="button" onClick={onChooseKey}>
+            <FileUp size={16} />
+            Select Key
+          </button>
+          <button className="button primary" type="button" onClick={onConfirm} disabled={!matches}>
+            <Check size={16} />
+            Upload Pair
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function applyFilter(entries, filter) {
   const term = filter.trim().toLowerCase();
   if (!term) return entries;
@@ -1129,6 +1230,16 @@ function isPs3IsoFile(fileName) {
 
 function isPs3IsoKeyFile(fileName) {
   return [".key", ".dkey"].includes(extensionFromName(fileName).toLowerCase());
+}
+
+function expectedKeyNamesForIso(isoName) {
+  const baseName = baseNameWithoutExtension(isoName);
+  return [`${baseName}.key`, `${baseName}.dkey`];
+}
+
+function isIsoKeyMatch(isoEntry, keyEntry) {
+  if (!isoEntry || !keyEntry) return false;
+  return expectedKeyNamesForIso(isoEntry.name).includes(keyEntry.name);
 }
 
 function fileNameFromPath(value) {
