@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Jester's Game Vault
+Comment=PS3 FTP vault for owned backups and homebrew
+Exec=jesters-game-vault %U
+Icon=io.github.thejesterwins.JestersGameVault
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Utility;Game;
+StartupWMClass=Jester's Game Vault

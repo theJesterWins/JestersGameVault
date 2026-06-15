@@ -1,0 +1,42 @@
+id: io.github.thejesterwins.JestersGameVault
+branch: stable
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: "24.08"
+command: jesters-game-vault
+separate-locales: false
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=home
+  - --filesystem=/media
+  - --filesystem=/run/media
+modules:
+  - name: jesters-game-vault
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 jesters-game-vault.sh /app/bin/jesters-game-vault
+      - mkdir -p /app/jesters-game-vault
+      - cp -a app/. /app/jesters-game-vault/
+      - chmod -R a+rX /app/jesters-game-vault
+      - chmod +x /app/jesters-game-vault/jesters-game-vault
+      - install -Dm644 io.github.thejesterwins.JestersGameVault.desktop /app/share/applications/io.github.thejesterwins.JestersGameVault.desktop
+      - install -Dm644 io.github.thejesterwins.JestersGameVault.metainfo.xml /app/share/metainfo/io.github.thejesterwins.JestersGameVault.metainfo.xml
+      - install -Dm644 icon-256.png /app/share/icons/hicolor/256x256/apps/io.github.thejesterwins.JestersGameVault.png
+    sources:
+      - type: dir
+        path: app
+        dest: app
+      - type: file
+        path: jesters-game-vault.sh
+      - type: file
+        path: io.github.thejesterwins.JestersGameVault.desktop
+      - type: file
+        path: io.github.thejesterwins.JestersGameVault.metainfo.xml
+      - type: file
+        path: icon-256.png

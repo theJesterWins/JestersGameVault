@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.thejesterwins.JestersGameVault</id>
+  <name>Jester's Game Vault</name>
+  <summary>PS3 FTP vault for owned backups and homebrew</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.thejesterwins">
+    <name>theJesterWins</name>
+  </developer>
+  <description>
+    <p>
+      Jester's Game Vault is a PS3-focused desktop FTP client for managing legally owned
+      backups and homebrew on jailbroken PS3 systems running webMAN MOD.
+    </p>
+    <p>
+      It provides local and remote file panes, PS3 ISO key pairing checks, transfer progress,
+      webMAN refresh utilities, and delete confirmation for PS3 storage paths.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.thejesterwins.JestersGameVault.desktop</launchable>
+  <url type="homepage">https://github.com/theJesterWins/JestersGameVault</url>
+  <url type="bugtracker">https://github.com/theJesterWins/JestersGameVault/issues</url>
+  <categories>
+    <category>Game</category>
+    <category>Utility</category>
+  </categories>
+  <releases>
+    <release version="__VERSION__" date="__DATE__">
+      <description>
+        <p>Adds Linux packaging support with Flatpak and a portable Linux tarball.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>

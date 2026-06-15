@@ -7,6 +7,8 @@ artifacts*/
 *.log
 *.pid
 *.tmp
+*.flatpak
+*.tar.gz
 
 *.iso
 *.bin

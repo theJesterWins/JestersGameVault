@@ -2,6 +2,8 @@
 
 A PS3-focused desktop FTP client with a WinSCP-style two-pane workflow.
 
+Jester's Game Vault is free and open source software under the [MIT license](LICENSE).
+
 This app is intended for legally owned disc backups, homebrew, and console maintenance on a jailbroken PS3 running Evilnat CFW, Cobra, and webMAN MOD.
 
 The main workflow is simple: dump or preserve a disc you own, select the correct PS3 ISO folder, transfer the backup, then refresh webMAN MOD so the game appears on the XMB.
@@ -38,6 +40,17 @@ npm run release:beta
 The GitHub beta zip is written to `artifacts/github-beta/`. It contains a portable app folder with `Jester's Game Vault.exe` inside. It does not install anything system-wide.
 
 For Windows trust and publisher identity, see [docs/windows-signing.md](docs/windows-signing.md).
+
+## Build Linux Flatpak and tarball
+
+Linux builds are intended to work across distributions, including Arch Linux, through Flatpak. See [docs/linux-flatpak.md](docs/linux-flatpak.md).
+
+```bash
+npm ci
+npm run release:linux
+```
+
+Linux artifacts are written to `artifacts/github-beta/` as a `.flatpak` bundle and a portable `.tar.gz`.
 
 ## Faster wired transfers
 
