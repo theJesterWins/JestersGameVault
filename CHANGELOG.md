@@ -2,6 +2,23 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.16 - 2026-06-16
+
+- Added an optional **Support future projects** donation section to File > About.
+- Added the Bitcoin wallet address with a Copy button in the About panel.
+- Added an Electron clipboard bridge so About-copy actions work in the packaged desktop app.
+- Added a Windows GitHub Actions release workflow so tagged releases can attach the Windows beta zip automatically.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- Browser QA: About donation panel render, wallet visibility, Copy button state, and console health.
+- `npm run release:beta`
+- Packaged Windows EXE smoke test.
+
 ## 0.1.15 - 2026-06-16
 
 - Added **Retry Failed** beside the queue controls to requeue failed upload/download transfer rows without reselecting files.

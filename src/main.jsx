@@ -41,6 +41,7 @@ const PS3_PATHS = [
   { label: "PSP", path: "/dev_hdd0/PSPISO/", hint: "PSP ISO games" }
 ];
 
+const BITCOIN_DONATION_WALLET = "bc1qsnfvru27nqz9ey27qpxuwfuqyh03y9hxnaher2";
 const PROFILE_STORAGE_KEY = "jgv.ps3Profiles";
 const SETTINGS_STORAGE_KEY = "jgv.settings";
 const LAYOUT_STORAGE_KEY = "jgv.layout";
@@ -57,7 +58,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.15",
+  version: "0.1.16",
   electron: "",
   chrome: "",
   node: "",
@@ -121,7 +122,11 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.15-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.16-preview" };
+    },
+    async copyText(text) {
+      window.__jgvMockClipboard = String(text || "");
+      return { ok: true };
     },
     async listLocal(targetPath) {
       return {
@@ -381,6 +386,11 @@ function makeMockDirectLanReport(payload = {}) {
 }
 
 async function copyTextToClipboard(text) {
+  if (api.copyText) {
+    await api.copyText(text);
+    return;
+  }
+
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
     return;
@@ -3129,6 +3139,26 @@ function DirectLanScript({ title, text, copied, onCopy }) {
 }
 
 function AboutDialog({ appInfo, onClose }) {
+  const [walletCopyState, setWalletCopyState] = useState("idle");
+  const copyResetRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    };
+  }, []);
+
+  async function copyDonationWallet() {
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    try {
+      await copyTextToClipboard(BITCOIN_DONATION_WALLET);
+      setWalletCopyState("copied");
+    } catch {
+      setWalletCopyState("failed");
+    }
+    copyResetRef.current = setTimeout(() => setWalletCopyState("idle"), 1800);
+  }
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="confirm-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
@@ -3147,6 +3177,21 @@ function AboutDialog({ appInfo, onClose }) {
             <code>{appInfo.chrome || "Preview"}</code>
             <span>Runtime</span>
             <code>{appInfo.packaged ? "Packaged app" : "Development / preview"}</code>
+          </div>
+          <div className="support-card">
+            <div>
+              <strong>Support future projects</strong>
+              <p>Donations are welcome to help support future projects.</p>
+            </div>
+            <div className="wallet-row">
+              <span>Bitcoin wallet</span>
+              <code>{BITCOIN_DONATION_WALLET}</code>
+              <button className="button secondary compact" type="button" onClick={copyDonationWallet}>
+                <ClipboardCheck size={14} />
+                {walletCopyState === "copied" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            {walletCopyState === "failed" ? <p className="copy-note warning">Copy failed. Select the wallet address manually.</p> : null}
           </div>
           <div className="pair-result ok">
             File &gt; About opens this version panel in the desktop build.

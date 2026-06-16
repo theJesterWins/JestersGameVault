@@ -1739,6 +1739,49 @@ button {
   color: #dffaf6;
 }
 
+.support-card {
+  margin-top: 14px;
+  border: 1px solid rgba(244, 207, 74, 0.28);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(244, 207, 74, 0.06);
+}
+
+.support-card strong {
+  color: #fff5bb;
+  font-size: 13px;
+}
+
+.support-card p {
+  margin-top: 5px;
+}
+
+.wallet-row {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.wallet-row span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wallet-row code {
+  margin-top: 0;
+  color: #dffaf6;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.copy-note.warning {
+  color: #ffb0b0;
+}
+
 .lan-form {
   margin-top: 14px;
   display: grid;

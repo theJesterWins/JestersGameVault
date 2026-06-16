@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("vaultAPI", {
   getAppInfo: () => ipcRenderer.invoke("app:info"),
+  copyText: (text) => ipcRenderer.invoke("app:copy-text", text),
   listLocal: (targetPath) => ipcRenderer.invoke("local:list", targetPath),
   pickLocalFolder: () => ipcRenderer.invoke("local:pick-folder"),
   pickLocalFiles: () => ipcRenderer.invoke("local:pick-files"),

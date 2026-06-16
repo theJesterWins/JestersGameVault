@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain } = require("electron");
 const { Menu } = require("electron");
 const ftp = require("basic-ftp");
 const { execFile } = require("node:child_process");
@@ -368,6 +368,11 @@ ipcMain.handle("app:info", async () => ({
   node: process.versions.node,
   packaged: app.isPackaged
 }));
+
+ipcMain.handle("app:copy-text", async (_event, text) => {
+  clipboard.writeText(String(text || ""));
+  return { ok: true };
+});
 
 ipcMain.handle("local:list", async (_event, targetPath) => {
   if (!targetPath) {
