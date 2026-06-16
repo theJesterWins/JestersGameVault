@@ -27,9 +27,18 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build Windows beta zip
+      - name: Package Windows app
         shell: pwsh
-        run: npm run release:beta
+        run: npm run pack:win
+
+      - name: Sign beta EXE
+        shell: pwsh
+        continue-on-error: true
+        run: npm run sign:beta
+
+      - name: Create Windows beta zip
+        shell: pwsh
+        run: npm run zip:beta
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
