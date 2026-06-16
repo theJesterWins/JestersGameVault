@@ -172,7 +172,7 @@ button {
 .connection-bar {
   border-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) auto 86px minmax(140px, 0.65fr) minmax(140px, 0.65fr) auto minmax(210px, 0.8fr);
+  grid-template-columns: minmax(170px, 1fr) auto 86px minmax(140px, 0.65fr) minmax(140px, 0.65fr) auto minmax(260px, 0.95fr) minmax(210px, 0.8fr);
   gap: 10px;
   align-items: end;
   padding: 12px;
@@ -372,11 +372,65 @@ button {
   text-overflow: ellipsis;
 }
 
+.storage-summary {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid rgba(82, 223, 209, 0.24);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 0 10px;
+  color: #dffffb;
+  background: rgba(82, 223, 209, 0.06);
+  cursor: pointer;
+}
+
+.storage-summary:hover {
+  border-color: rgba(82, 223, 209, 0.5);
+  background: rgba(82, 223, 209, 0.1);
+}
+
+.storage-summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.storage-summary strong,
+.storage-summary small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-summary strong {
+  font-size: 12px;
+}
+
+.storage-summary small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.spin-icon {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .workspace {
   flex: 1 1 420px;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, var(--local-fr, 52fr)) 8px 160px minmax(260px, var(--remote-fr, 48fr)) 230px;
+  grid-template-columns: minmax(260px, var(--local-fr, 52fr)) 8px 160px minmax(260px, var(--remote-fr, 48fr)) 8px var(--rail-width, 230px);
   gap: 10px;
   overflow: hidden;
 }
@@ -903,6 +957,16 @@ button {
 .icon-button.danger {
   color: #ff8f8f;
   border-color: rgba(255, 107, 107, 0.25);
+}
+
+.icon-button.warning {
+  color: var(--gold);
+  border-color: rgba(244, 207, 74, 0.25);
+}
+
+.icon-button.warning:hover:not(:disabled) {
+  border-color: rgba(244, 207, 74, 0.58);
+  background: rgba(244, 207, 74, 0.11);
 }
 
 .icon-button.danger:hover:not(:disabled) {
@@ -1974,6 +2038,17 @@ button {
   }
 }
 
+@media (max-width: 1400px) {
+  .connection-bar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .storage-summary,
+  .connection-note {
+    grid-column: span 2;
+  }
+}
+
 @media (max-width: 1180px) {
   .profile-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1982,14 +2057,6 @@ button {
   .option-cluster {
     grid-column: 1 / -1;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .connection-bar {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .connection-note {
-    grid-column: span 3;
   }
 
   .workspace {
@@ -2072,6 +2139,10 @@ button {
     grid-column: auto;
   }
 
+  .storage-summary {
+    grid-column: auto;
+  }
+
   .file-row {
     grid-template-columns: minmax(130px, 1fr) 72px 64px;
   }
@@ -2099,6 +2170,22 @@ button {
   .queue-row span:nth-child(6),
   .queue-row span:nth-child(7) {
     display: none;
+  }
+
+  .bottom-status {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .bottom-status-progress,
+  .bottom-status-stats {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .bottom-status-stats {
+    flex-wrap: wrap;
+    gap: 8px 12px;
   }
 
   .doctor-banner {

@@ -58,22 +58,32 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.16",
+  version: "1.0.0",
   electron: "",
   chrome: "",
   node: "",
-  packaged: false
+  packaged: false,
+  desktopSettingsPath: ""
 };
 const DEFAULT_LAYOUT = {
   localShare: 52,
   queueHeight: 320,
-  logHeight: 126
+  logHeight: 126,
+  railWidth: 230
+};
+
+const DEFAULT_STORAGE_INFO = {
+  local: { ok: false, label: "PC", message: "Choose a local folder." },
+  remote: { ok: false, label: "PS3 HDD", message: "Connect to PS3." },
+  loading: false,
+  updatedAt: ""
 };
 
 const LAYOUT_LIMITS = {
   localShare: { min: 28, max: 72, step: 1 },
   queueHeight: { min: 220, max: 660, step: 10 },
-  logHeight: { min: 80, max: 320, step: 10 }
+  logHeight: { min: 80, max: 320, step: 10 },
+  railWidth: { min: 180, max: 340, step: 10 }
 };
 
 const SAMPLE_LOCAL = [
@@ -122,7 +132,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.16-preview" };
+      return { ...DEFAULT_APP_INFO, version: "1.0.0-preview" };
     },
     async copyText(text) {
       window.__jgvMockClipboard = String(text || "");
@@ -199,6 +209,39 @@ function createMockApi() {
     },
     async ftpStatus() {
       return { connected: true, host: "192.168.1.159", port: 21, user: "anonymous" };
+    },
+    async getStorageInfo(payload = {}) {
+      await wait(120);
+      return {
+        local: payload.localPath
+          ? {
+              ok: true,
+              label: "PC",
+              root: payload.localPath.slice(0, 3) || "C:\\",
+              path: payload.localPath,
+              totalBytes: 1_920_000_000_000,
+              freeBytes: 842_000_000_000,
+              usedBytes: 1_078_000_000_000,
+              updatedAt: new Date().toISOString()
+            }
+          : {
+              ok: false,
+              label: "PC",
+              message: "Choose a local folder.",
+              updatedAt: new Date().toISOString()
+            },
+        remote: {
+          ok: true,
+          label: "PS3 HDD",
+          path: "/dev_hdd0/",
+          totalBytes: 500_000_000_000,
+          freeBytes: 186_000_000_000,
+          usedBytes: 314_000_000_000,
+          source: "preview",
+          updatedAt: new Date().toISOString()
+        },
+        updatedAt: new Date().toISOString()
+      };
     },
     async listRemote(targetPath) {
       remotePath = targetPath || remotePath;
@@ -438,6 +481,7 @@ function App() {
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [speedHistory, setSpeedHistory] = useState(() => readStoredSpeedHistory());
   const [appInfo, setAppInfo] = useState(DEFAULT_APP_INFO);
+  const [storageInfo, setStorageInfo] = useState(DEFAULT_STORAGE_INFO);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [keyPairCandidate, setKeyPairCandidate] = useState(null);
   const [directLanOpen, setDirectLanOpen] = useState(false);
@@ -509,9 +553,46 @@ function App() {
     }
   }, [connection.connected, pushEvent, remote.path]);
 
+  const refreshStorageInfo = useCallback(async () => {
+    if (!api.getStorageInfo) return;
+    setStorageInfo((current) => ({ ...current, loading: true }));
+    try {
+      const result = await api.getStorageInfo({
+        localPath: local.path,
+        remotePath: "/dev_hdd0/"
+      });
+      setStorageInfo({
+        ...DEFAULT_STORAGE_INFO,
+        ...result,
+        loading: false,
+        updatedAt: result.updatedAt || new Date().toISOString()
+      });
+    } catch (error) {
+      setStorageInfo((current) => ({
+        ...current,
+        loading: false,
+        remote: {
+          ok: false,
+          label: "PS3 HDD",
+          message: error.message
+        },
+        updatedAt: new Date().toISOString()
+      }));
+    }
+  }, [local.path]);
+
   useEffect(() => {
     refreshLocal();
   }, [refreshLocal]);
+
+  useEffect(() => {
+    refreshStorageInfo();
+  }, [refreshStorageInfo]);
+
+  useEffect(() => {
+    const timer = setInterval(refreshStorageInfo, 60000);
+    return () => clearInterval(timer);
+  }, [refreshStorageInfo]);
 
   useEffect(() => {
     if (window.vaultAPI || mockRemoteInitializedRef.current) return;
@@ -668,6 +749,7 @@ function App() {
       }));
       setStatus(`Connected to ${result.host}:${result.port} as ${result.user}.`);
       await refreshRemote(remote.path, true);
+      await refreshStorageInfo();
     } catch (error) {
       setConnection((current) => ({ ...current, connected: false }));
       setStatus(`Connection failed: ${error.message}`);
@@ -683,6 +765,7 @@ function App() {
     setConnection((current) => ({ ...current, connected: false }));
     setStatus("Disconnected.");
     pushEvent("info", "Disconnected.");
+    await refreshStorageInfo();
   }
 
   function applyProfile(profileId) {
@@ -1094,6 +1177,7 @@ function App() {
     }
 
     await refreshRemote(targetRemotePath);
+    await refreshStorageInfo();
 
     if (uploadedJobs.length > 0 && refreshAfterUpload) {
       await runWebmanAction("refresh");
@@ -1272,6 +1356,7 @@ function App() {
     }
 
     await refreshLocal(jobs[0]?.localDir || local.path);
+    await refreshStorageInfo();
     const summary = formatTransferBatchSummary({
       label: "Download queue",
       total: jobs.length,
@@ -1427,6 +1512,7 @@ function App() {
       );
       setStatus(`Deleted ${candidate.name} from the PS3.`);
       await refreshRemote(remote.path);
+      await refreshStorageInfo();
     } catch (error) {
       setQueue((items) =>
         items.map((item) => (item.id === id ? { ...item, status: "Failed", error: error.message } : item))
@@ -1475,6 +1561,7 @@ function App() {
         target: result.remoteDir || remote.path
       });
       await refreshRemote(remote.path);
+      await refreshStorageInfo();
     } catch (error) {
       setStatus(`Speed test failed: ${error.message}`);
       pushEvent("error", `Speed test failed: ${error.message}`);
@@ -1850,6 +1937,7 @@ function App() {
   function startResize(kind, event) {
     if (event.button !== undefined && event.button !== 0) return;
     event.preventDefault();
+    const startX = event.clientX;
     const startY = event.clientY;
     const startLayout = layout;
     const workspaceRect = workspaceRef.current?.getBoundingClientRect();
@@ -1857,7 +1945,7 @@ function App() {
 
     const move = (moveEvent) => {
       if (kind === "panes" && workspaceRect) {
-        const fixedWidth = 160 + 230 + 8 + 40;
+        const fixedWidth = 160 + startLayout.railWidth + 16 + 50;
         const availableWidth = Math.max(workspaceRect.width - fixedWidth, 320);
         const localWidth = clampNumber(moveEvent.clientX - workspaceRect.left, availableWidth * 0.28, availableWidth * 0.72, availableWidth * 0.52);
         setLayoutValue("localShare", (localWidth / availableWidth) * 100);
@@ -1871,6 +1959,11 @@ function App() {
 
       if (kind === "log") {
         setLayoutValue("logHeight", startLayout.logHeight - (moveEvent.clientY - startY));
+        return;
+      }
+
+      if (kind === "rail") {
+        setLayoutValue("railWidth", startLayout.railWidth - (moveEvent.clientX - startX));
       }
     };
 
@@ -1893,6 +1986,8 @@ function App() {
       setLayoutValue("queueHeight", layout.queueHeight + direction * 20);
     } else if (kind === "log") {
       setLayoutValue("logHeight", layout.logHeight + direction * 10);
+    } else if (kind === "rail") {
+      setLayoutValue("railWidth", layout.railWidth + direction * 10);
     }
   }
 
@@ -1903,7 +1998,8 @@ function App() {
         "--local-fr": `${layout.localShare}fr`,
         "--remote-fr": `${100 - layout.localShare}fr`,
         "--queue-height": `${layout.queueHeight}px`,
-        "--log-height": `${layout.logHeight}px`
+        "--log-height": `${layout.logHeight}px`,
+        "--rail-width": `${layout.railWidth}px`
       }}
     >
       <header className="titlebar">
@@ -1979,6 +2075,7 @@ function App() {
             Connect
           </button>
         )}
+        <StorageSummary storageInfo={storageInfo} onRefresh={refreshStorageInfo} />
         <div className="connection-note">
           {directLanReport?.ftp?.ok ? <Cable size={16} /> : <ShieldCheck size={16} />}
           <span>
@@ -2059,6 +2156,12 @@ function App() {
           action={
             <div className="pane-actions">
               <Server size={17} />
+              <button className="icon-button" type="button" title="Refresh webMAN XML" onClick={() => runWebmanAction("refresh")}>
+                <RefreshCw size={16} />
+              </button>
+              <button className="icon-button warning" type="button" title="Restart PS3" onClick={() => runWebmanAction("restart")}>
+                <Power size={16} />
+              </button>
               <button
                 className="icon-button danger"
                 type="button"
@@ -2070,6 +2173,14 @@ function App() {
               </button>
             </div>
           }
+        />
+
+        <ResizeHandle
+          orientation="vertical"
+          active={activeResize === "rail"}
+          label="Resize PS3 pane and right rail"
+          onPointerDown={(event) => startResize("rail", event)}
+          onNudge={(direction) => nudgeLayout("rail", direction)}
         />
 
         <aside className="vault-rail">
@@ -2091,17 +2202,6 @@ function App() {
                 </button>
               ))}
             </div>
-          </div>
-          <div className="rail-section">
-            <h2>Utilities</h2>
-            <button className="button full" type="button" onClick={() => runWebmanAction("refresh")}>
-              <RefreshCw size={17} />
-              Refresh XML
-            </button>
-            <button className="button full warning" type="button" onClick={() => runWebmanAction("restart")}>
-              <Power size={17} />
-              Restart PS3
-            </button>
           </div>
           <div className="rail-section">
             <h2>Network</h2>
@@ -2484,10 +2584,27 @@ function SpeedHistory({ samples }) {
   );
 }
 
+function StorageSummary({ storageInfo, onRefresh }) {
+  const local = storageInfo.local || DEFAULT_STORAGE_INFO.local;
+  const remote = storageInfo.remote || DEFAULT_STORAGE_INFO.remote;
+
+  return (
+    <button className="storage-summary" type="button" onClick={onRefresh} title={storageTooltip(local, remote)}>
+      <HardDrive size={16} />
+      <span>
+        <strong>{formatStorageLine(local, "PC")}</strong>
+        <small>{formatStorageLine(remote, "PS3 HDD")}</small>
+      </span>
+      <RefreshCw size={14} className={storageInfo.loading ? "spin-icon" : ""} />
+    </button>
+  );
+}
+
 function LayoutControls({ layout, onChange, onReset }) {
   const update = (key, value) => {
     onChange((current) => ({ ...current, [key]: Number(value) }));
   };
+  const updateFromInput = (key) => (event) => update(key, event.currentTarget.value);
 
   return (
     <div className="layout-controls" aria-label="Adjust layout">
@@ -2498,7 +2615,8 @@ function LayoutControls({ layout, onChange, onReset }) {
           min={LAYOUT_LIMITS.localShare.min}
           max={LAYOUT_LIMITS.localShare.max}
           value={layout.localShare}
-          onChange={(event) => update("localShare", event.target.value)}
+          onInput={updateFromInput("localShare")}
+          onChange={updateFromInput("localShare")}
         />
       </label>
       <label>
@@ -2509,7 +2627,8 @@ function LayoutControls({ layout, onChange, onReset }) {
           max={LAYOUT_LIMITS.queueHeight.max}
           step={LAYOUT_LIMITS.queueHeight.step}
           value={layout.queueHeight}
-          onChange={(event) => update("queueHeight", event.target.value)}
+          onInput={updateFromInput("queueHeight")}
+          onChange={updateFromInput("queueHeight")}
         />
       </label>
       <label>
@@ -2520,7 +2639,20 @@ function LayoutControls({ layout, onChange, onReset }) {
           max={LAYOUT_LIMITS.logHeight.max}
           step={LAYOUT_LIMITS.logHeight.step}
           value={layout.logHeight}
-          onChange={(event) => update("logHeight", event.target.value)}
+          onInput={updateFromInput("logHeight")}
+          onChange={updateFromInput("logHeight")}
+        />
+      </label>
+      <label>
+        <span>Right rail width</span>
+        <input
+          type="range"
+          min={LAYOUT_LIMITS.railWidth.min}
+          max={LAYOUT_LIMITS.railWidth.max}
+          step={LAYOUT_LIMITS.railWidth.step}
+          value={layout.railWidth}
+          onInput={updateFromInput("railWidth")}
+          onChange={updateFromInput("railWidth")}
         />
       </label>
       <button className="button secondary compact" type="button" onClick={onReset}>
@@ -3177,6 +3309,8 @@ function AboutDialog({ appInfo, onClose }) {
             <code>{appInfo.chrome || "Preview"}</code>
             <span>Runtime</span>
             <code>{appInfo.packaged ? "Packaged app" : "Development / preview"}</code>
+            <span>Desktop settings</span>
+            <code>{appInfo.desktopSettingsPath || "Preview"}</code>
           </div>
           <div className="support-card">
             <div>
@@ -3192,6 +3326,9 @@ function AboutDialog({ appInfo, onClose }) {
               </button>
             </div>
             {walletCopyState === "failed" ? <p className="copy-note warning">Copy failed. Select the wallet address manually.</p> : null}
+          </div>
+          <div className="pair-result ok">
+            Special thank you to all the haters. This one's for you. :D
           </div>
           <div className="pair-result ok">
             File &gt; About opens this version panel in the desktop build.
@@ -3708,9 +3845,10 @@ function readStoredLayout() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(LAYOUT_STORAGE_KEY) || "{}");
     return {
-      localShare: clampNumber(parsed.localShare, 35, 65, DEFAULT_LAYOUT.localShare),
-      queueHeight: clampNumber(parsed.queueHeight, 220, 520, DEFAULT_LAYOUT.queueHeight),
-      logHeight: clampNumber(parsed.logHeight, 80, 220, DEFAULT_LAYOUT.logHeight)
+      localShare: clampNumber(parsed.localShare, LAYOUT_LIMITS.localShare.min, LAYOUT_LIMITS.localShare.max, DEFAULT_LAYOUT.localShare),
+      queueHeight: clampNumber(parsed.queueHeight, LAYOUT_LIMITS.queueHeight.min, LAYOUT_LIMITS.queueHeight.max, DEFAULT_LAYOUT.queueHeight),
+      logHeight: clampNumber(parsed.logHeight, LAYOUT_LIMITS.logHeight.min, LAYOUT_LIMITS.logHeight.max, DEFAULT_LAYOUT.logHeight),
+      railWidth: clampNumber(parsed.railWidth, LAYOUT_LIMITS.railWidth.min, LAYOUT_LIMITS.railWidth.max, DEFAULT_LAYOUT.railWidth)
     };
   } catch {
     return DEFAULT_LAYOUT;
@@ -3772,6 +3910,35 @@ function formatBytes(value) {
     unitIndex += 1;
   }
   return `${amount >= 10 || unitIndex === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatStorageLine(info, fallbackLabel) {
+  const label = info?.label || fallbackLabel;
+  if (info?.ok && info.freeBytes) {
+    const root = storageRootLabel(info);
+    return `${label}${root ? ` ${root}` : ""}: ${formatBytes(info.freeBytes)} free`;
+  }
+  return `${label}: ${info?.message || "--"}`;
+}
+
+function storageTooltip(local, remote) {
+  return [
+    storageTooltipLine(local, "PC"),
+    storageTooltipLine(remote, "PS3 HDD")
+  ].join("\n");
+}
+
+function storageTooltipLine(info, fallbackLabel) {
+  const line = formatStorageLine(info, fallbackLabel);
+  if (!info?.ok || !info.totalBytes) return line;
+  return `${line} of ${formatBytes(info.totalBytes)} total`;
+}
+
+function storageRootLabel(info) {
+  const root = String(info?.root || "").replace(/\\$/u, "");
+  if (root) return root;
+  if (info?.path === "/dev_hdd0/" || info?.path === "/dev_hdd0") return "";
+  return "";
 }
 
 function formatDate(value) {

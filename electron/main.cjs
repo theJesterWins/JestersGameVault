@@ -1,23 +1,75 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain } = require("electron");
-const { Menu } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } = require("electron");
 const ftp = require("basic-ftp");
 const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
 let mainWindow;
+let tray;
+let isQuitting = false;
+let desktopSettings = {
+  closeToTray: true
+};
 let ftpClient;
 let ftpConfig;
 let ftpTaskQueue = Promise.resolve();
 const activeUploadCancelers = new Map();
 
 const PS3_DEFAULT_PATH = "/dev_hdd0/PS2ISO/";
+const DESKTOP_SETTINGS_FILE = "desktop-settings.json";
+const REMOTE_STORAGE_PATH = "/dev_hdd0/";
+const REMOTE_STORAGE_COMMANDS = [
+  "SITE DF /dev_hdd0",
+  "SITE DF",
+  "SITE FREE /dev_hdd0",
+  "STAT /dev_hdd0",
+  "STAT"
+];
 
 function assetPath(...parts) {
   return path.join(__dirname, "..", ...parts);
+}
+
+function desktopSettingsPath() {
+  return path.join(app.getPath("userData"), DESKTOP_SETTINGS_FILE);
+}
+
+function loadDesktopSettings() {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(fsSync.readFileSync(desktopSettingsPath(), "utf8").replace(/^\uFEFF/u, ""));
+  } catch {
+    parsed = {};
+  }
+
+  desktopSettings = {
+    closeToTray: parsed.closeToTray !== false
+  };
+  saveDesktopSettings();
+}
+
+function saveDesktopSettings() {
+  const settingsPath = desktopSettingsPath();
+  fsSync.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fsSync.writeFileSync(`${settingsPath}.tmp`, `${JSON.stringify(desktopSettings, null, 2)}\n`, "utf8");
+  fsSync.renameSync(`${settingsPath}.tmp`, settingsPath);
+}
+
+function setCloseToTray(enabled) {
+  desktopSettings.closeToTray = Boolean(enabled);
+  saveDesktopSettings();
+  Menu.setApplicationMenu(createAppMenu());
+  updateTrayMenu();
+  emitVaultEvent("info", `Close-to-tray is ${desktopSettings.closeToTray ? "on" : "off"}. Settings file: ${desktopSettingsPath()}`);
+}
+
+function showDesktopSettingsFile() {
+  saveDesktopSettings();
+  shell.showItemInFolder(desktopSettingsPath());
 }
 
 function createWindow() {
@@ -43,6 +95,23 @@ function createWindow() {
     mainWindow.loadFile(assetPath("dist", "index.html"));
   }
 
+  mainWindow.on("minimize", (event) => {
+    event.preventDefault();
+    hideMainWindowToTray();
+  });
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting || !desktopSettings.closeToTray) return;
+    event.preventDefault();
+    hideMainWindowToTray();
+  });
+
+  mainWindow.on("show", updateTrayMenu);
+  mainWindow.on("hide", updateTrayMenu);
+  mainWindow.on("closed", () => {
+    mainWindow = undefined;
+  });
+
   Menu.setApplicationMenu(createAppMenu());
 }
 
@@ -57,8 +126,26 @@ function createAppMenu() {
             mainWindow?.webContents.send("app:show-about");
           }
         },
+        {
+          label: "Hide to Tray",
+          click: hideMainWindowToTray
+        },
+        {
+          label: "Close Button Hides to Tray",
+          type: "checkbox",
+          checked: desktopSettings.closeToTray,
+          click: (menuItem) => setCloseToTray(menuItem.checked)
+        },
+        {
+          label: "Show Desktop Settings File",
+          click: showDesktopSettingsFile
+        },
         { type: "separator" },
-        { role: "quit" }
+        {
+          label: "Quit Jester's Game Vault",
+          accelerator: "CmdOrCtrl+Q",
+          click: quitApp
+        }
       ]
     },
     {
@@ -89,11 +176,93 @@ function createAppMenu() {
     {
       label: "Window",
       submenu: [
-        { role: "minimize" },
+        {
+          label: "Minimize to Tray",
+          click: hideMainWindowToTray
+        },
         { role: "close" }
       ]
     }
   ]);
+}
+
+function createTrayIcon() {
+  const candidates = [
+    assetPath("build", "icon.ico"),
+    assetPath("src", "assets", "jester-icon.png")
+  ];
+
+  for (const candidate of candidates) {
+    const icon = nativeImage.createFromPath(candidate);
+    if (!icon.isEmpty()) return icon;
+  }
+
+  return nativeImage.createEmpty();
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip("Jester's Game Vault");
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
+  updateTrayMenu();
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: "Show Jester's Game Vault",
+      click: showMainWindow
+    },
+    {
+      label: "Hide to Tray",
+      enabled: Boolean(mainWindow && mainWindow.isVisible()),
+      click: hideMainWindowToTray
+    },
+    {
+      label: "About",
+      click: () => {
+        showMainWindow();
+        mainWindow?.webContents.send("app:show-about");
+      }
+    },
+    {
+      label: "Close Button Hides to Tray",
+      type: "checkbox",
+      checked: desktopSettings.closeToTray,
+      click: (menuItem) => setCloseToTray(menuItem.checked)
+    },
+    { type: "separator" },
+    {
+      label: "Quit Jester's Game Vault",
+      click: quitApp
+    }
+  ]));
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  updateTrayMenu();
+}
+
+function hideMainWindowToTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!tray) createTray();
+  mainWindow.hide();
+  emitVaultEvent("info", "Jester's Game Vault is running in the system tray. Use the tray icon to restore or quit.");
+  updateTrayMenu();
+}
+
+function quitApp() {
+  isQuitting = true;
+  app.quit();
 }
 
 function emitVaultEvent(level, message, details = {}) {
@@ -130,7 +299,15 @@ function createTransferProgressEmitter(transferId, totalBytes, startedAt) {
   };
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  loadDesktopSettings();
+  createWindow();
+  createTray();
+});
+
+app.on("before-quit", () => {
+  isQuitting = true;
+});
 
 app.on("window-all-closed", () => {
   if (ftpClient) ftpClient.close();
@@ -138,7 +315,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  showMainWindow();
 });
 
 function formatLocalEntry(parentPath, dirent) {
@@ -207,6 +384,146 @@ async function localFileEntry(filePath) {
     modifiedAt: stat.mtime.toISOString(),
     type: fileTypeLabel(filePath)
   };
+}
+
+async function getLocalStorageInfo(targetPath) {
+  if (!targetPath) {
+    return {
+      ok: false,
+      label: "PC",
+      message: "Choose a local folder."
+    };
+  }
+
+  const statPath = await resolveExistingStoragePath(targetPath);
+  const stat = await fs.stat(statPath);
+  const basePath = stat.isDirectory() ? statPath : path.dirname(statPath);
+  const storage = await fs.statfs(basePath);
+  const blockSize = Number(storage.bsize) || 0;
+  const totalBytes = Math.max(0, Number(storage.blocks) * blockSize);
+  const freeBlocks = Number(storage.bavail || storage.bfree || 0);
+  const freeBytes = Math.max(0, freeBlocks * blockSize);
+  const root = path.parse(path.resolve(basePath)).root || basePath;
+
+  return {
+    ok: true,
+    label: "PC",
+    root,
+    path: basePath,
+    totalBytes,
+    freeBytes,
+    usedBytes: Math.max(totalBytes - freeBytes, 0),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function resolveExistingStoragePath(targetPath) {
+  let candidate = path.resolve(targetPath);
+  while (candidate) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      const parent = path.dirname(candidate);
+      if (parent === candidate) break;
+      candidate = parent;
+    }
+  }
+  throw new Error(`Local path is not available: ${targetPath}`);
+}
+
+async function getRemoteStorageInfo(remotePath = REMOTE_STORAGE_PATH) {
+  if (!ftpConfig) {
+    return {
+      ok: false,
+      label: "PS3 HDD",
+      path: remotePath,
+      message: "Connect to PS3."
+    };
+  }
+
+  return withFreshFtpClient(async (client) => {
+    const attempts = [];
+    for (const command of REMOTE_STORAGE_COMMANDS) {
+      const response = await client.sendIgnoringError(command);
+      const raw = String(response?.message || "");
+      attempts.push({
+        command,
+        code: response?.code || 0,
+        message: raw.slice(0, 240)
+      });
+
+      const parsed = parseStorageResponse(raw);
+      if (parsed.freeBytes) {
+        return {
+          ok: true,
+          label: "PS3 HDD",
+          path: remotePath,
+          source: command,
+          raw: raw.slice(0, 500),
+          updatedAt: new Date().toISOString(),
+          ...parsed
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      label: "PS3 HDD",
+      path: remotePath,
+      message: "Free space not reported by FTP.",
+      attempts,
+      updatedAt: new Date().toISOString()
+    };
+  }, 10000).catch((error) => storageError("PS3 HDD", error, remotePath));
+}
+
+function storageError(label, error, targetPath = "") {
+  return {
+    ok: false,
+    label,
+    path: targetPath,
+    message: error?.message || String(error || "Storage check failed."),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function parseStorageResponse(message) {
+  const text = String(message || "").replace(/\r/g, "\n");
+  const freeBytes = findStorageBytes(text, ["free", "available", "avail"]);
+  const totalBytes = findStorageBytes(text, ["total", "capacity", "size"]);
+  const usedBytes = findStorageBytes(text, ["used"]);
+  const inferredTotal = totalBytes || (freeBytes && usedBytes ? freeBytes + usedBytes : 0);
+
+  return {
+    freeBytes: freeBytes || 0,
+    totalBytes: inferredTotal || 0,
+    usedBytes: usedBytes || (inferredTotal && freeBytes ? Math.max(inferredTotal - freeBytes, 0) : 0)
+  };
+}
+
+function findStorageBytes(text, labels) {
+  const labelPattern = labels.join("|");
+  const unitPattern = "(bytes?|b|kbytes?|kb|kib|mbytes?|mb|mib|gbytes?|gb|gib|tbytes?|tb|tib)";
+  const valuePattern = "(\\d+(?:\\.\\d+)?)";
+  const labelBefore = new RegExp(`(?:${labelPattern})\\s*[:=]?\\s*${valuePattern}\\s*${unitPattern}?`, "iu");
+  const valueBefore = new RegExp(`${valuePattern}\\s*${unitPattern}\\s*(?:${labelPattern})`, "iu");
+  const spacedLabel = new RegExp(`(?:${labelPattern})[^\\d]{0,24}${valuePattern}\\s*${unitPattern}?`, "iu");
+  const match = text.match(labelBefore) || text.match(valueBefore) || text.match(spacedLabel);
+  if (!match) return 0;
+  const value = Number(match[1]);
+  const unit = match[2] || "B";
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * storageUnitMultiplier(unit));
+}
+
+function storageUnitMultiplier(unit) {
+  const normalized = String(unit || "B").toLowerCase();
+  if (["tb", "tib", "tbyte", "tbytes"].includes(normalized)) return 1024 ** 4;
+  if (["gb", "gib", "gbyte", "gbytes"].includes(normalized)) return 1024 ** 3;
+  if (["mb", "mib", "mbyte", "mbytes"].includes(normalized)) return 1024 ** 2;
+  if (["kb", "kib", "kbyte", "kbytes"].includes(normalized)) return 1024;
+  return 1;
 }
 
 function remoteRelativePathFromPayload(payload) {
@@ -366,7 +683,8 @@ ipcMain.handle("app:info", async () => ({
   electron: process.versions.electron,
   chrome: process.versions.chrome,
   node: process.versions.node,
-  packaged: app.isPackaged
+  packaged: app.isPackaged,
+  desktopSettingsPath: desktopSettingsPath()
 }));
 
 ipcMain.handle("app:copy-text", async (_event, text) => {
@@ -487,6 +805,19 @@ ipcMain.handle("local:find-matching-key-file", async (_event, isoPath) => {
   }
 
   return null;
+});
+
+ipcMain.handle("storage:info", async (_event, payload = {}) => {
+  const [localResult, remoteResult] = await Promise.allSettled([
+    getLocalStorageInfo(payload.localPath),
+    getRemoteStorageInfo(payload.remotePath || REMOTE_STORAGE_PATH)
+  ]);
+
+  return {
+    local: localResult.status === "fulfilled" ? localResult.value : storageError("PC", localResult.reason),
+    remote: remoteResult.status === "fulfilled" ? remoteResult.value : storageError("PS3 HDD", remoteResult.reason),
+    updatedAt: new Date().toISOString()
+  };
 });
 
 ipcMain.handle("ftp:connect", async (_event, config) => {

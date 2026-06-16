@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("vaultAPI", {
   applyDirectLan: (payload) => ipcRenderer.invoke("network:direct-lan-apply", payload),
   restoreDirectLan: (payload) => ipcRenderer.invoke("network:direct-lan-restore", payload),
   webmanAction: (action) => ipcRenderer.invoke("webman:action", action),
+  getStorageInfo: (payload) => ipcRenderer.invoke("storage:info", payload),
   onTransferProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("transfer:progress", listener);

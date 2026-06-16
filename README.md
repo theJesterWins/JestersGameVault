@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.16-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-1.0.0-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
@@ -84,9 +84,13 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Download selected PS3 files or folders back to the active local folder
 - Use safe `.part` transfers, size verification, preflight checks, and reconnect/retry for steadier FTP sessions
 - Browse PS3 folders while long uploads or downloads continue in the transfer queue
+- See PC drive free space and PS3 `/dev_hdd0` free space in the connection strip when available
 - See the current version in the title area or File > About
 - View the optional Bitcoin donation wallet in File > About with one-click copy support
+- Close with the window X to keep Jester's Game Vault active in the system tray by default
+- Toggle close-to-tray from File > Close Button Hides to Tray or edit `desktop-settings.json` from File > Show Desktop Settings File
 - Adjust local/remote pane width, queue height, and live-log height for different PC screens
+- Adjust right rail width or drag the divider between the PS3 pane and the right rail
 - Select a PS3 ISO, then choose its `.key` / `.dkey` in a pairing popup before upload
 - Auto-detect a same-folder PS3 ISO key and prefill the pairing popup
 - Check that the key filename spelling exactly matches the ISO filename before paired upload

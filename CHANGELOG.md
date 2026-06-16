@@ -1,6 +1,33 @@
 # Changelog
 
-All notable beta changes for Jester's Game Vault are tracked here.
+All notable changes for Jester's Game Vault are tracked here.
+
+## 1.0.0 - 2026-06-16
+
+- Promoted the app version to **1.0.0**.
+- Moved manual webMAN MOD refresh/restart actions into the PS3 Vault pane header as compact icon buttons.
+- Removed the duplicate right-rail **Utilities** section so the rail stays focused on paths, network, speed, and layout.
+- Added a draggable divider between the PS3 Vault pane and the right rail.
+- Added a saved **Right rail width** layout control.
+- Added a small File > About thank-you message for the haters.
+- Added system tray support so clicking the window X hides the app to the tray and keeps transfers active by default.
+- Added a saved `desktop-settings.json` close-to-tray toggle, plus File menu controls to change it or reveal the settings file.
+- Added a connection-strip storage readout for PC drive free space and PS3 `/dev_hdd0` free space when the FTP server reports it.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- Browser QA: desktop render, About dialog, donation wallet, thank-you message, right-rail cleanup, and console health.
+- Browser QA: narrow viewport overflow check with the bottom status row stacked cleanly.
+- Browser QA: storage readout render and connection-strip wrapping at desktop and narrow widths.
+- `npm run release:beta`
+- `npm run sign:beta`
+- `npm run zip:beta`
+- Packaged Windows EXE smoke test for app render, version, right-rail cleanup, storage readout, About dialog, donation wallet, and thank-you message.
+- Packaged Windows EXE smoke test for close-to-tray default on, plus `desktop-settings.json` override off.
 
 ## 0.1.16 - 2026-06-16
 
