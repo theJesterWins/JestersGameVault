@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.11-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-0.1.12-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
@@ -98,7 +98,7 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation
 - Transfer queue with upload and delete status from Electron
 - webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons
-- Direct LAN wizard and FTP speed test for Ethernet experiments
+- Direct LAN Builder with Ethernet detection, one-click Windows auto-map, restore, and FTP probe
 - Browser-preview fallback when Electron APIs are unavailable
 - Vault Library / Sync view for missing games, ready matches, size mismatches, missing keys, orphan keys, and remote-only items
 - Stage a library item into the existing transfer flow with the recommended PS3 target folder

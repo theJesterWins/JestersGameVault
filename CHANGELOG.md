@@ -2,6 +2,25 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.12 - 2026-06-16
+
+- Rebuilt Direct LAN into a Direct LAN Builder for PC-to-PS3 Ethernet links.
+- Added Ethernet adapter detection, current adapter IP reporting, PS3 MAC reporting, and FTP port probing.
+- Added Windows auto-map support that requests admin rights, adds a temporary Ethernet IP, routes only the PS3 IP over Ethernet, and pins the PS3 MAC as a static neighbor when provided.
+- Added Direct LAN restore support that removes the temporary route/IP/neighbor entries the app applied.
+- Added copyable advanced Apply/Restore PowerShell scripts for manual troubleshooting.
+- Updated the Direct LAN target flow so the app can fill the PS3 IP field from the builder.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- `npm run release:beta`
+- Browser QA: Direct LAN detection, mock auto-map, FTP-open state, and PS3 IP target fill.
+- Packaged Windows EXE smoke test.
+
 ## 0.1.11 - 2026-06-16
 
 - Added a toggleable Vault Library / Sync view that compares the current local folder with the active PS3 folder.

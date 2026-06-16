@@ -1,8 +1,10 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { Menu } = require("electron");
 const ftp = require("basic-ftp");
+const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -1041,6 +1043,12 @@ ipcMain.handle("ftp:speed-test", async (_event, payload) => runFtpTask("Speed te
   }
 }));
 
+ipcMain.handle("network:direct-lan-diagnose", async (_event, payload) => diagnoseDirectLan(payload || {}));
+
+ipcMain.handle("network:direct-lan-apply", async (_event, payload) => applyDirectLanMapping(payload || {}));
+
+ipcMain.handle("network:direct-lan-restore", async (_event, payload) => restoreDirectLanMapping(payload || {}));
+
 ipcMain.handle("webman:action", async (_event, action) => {
   if (!ftpConfig?.host) {
     throw new Error("Connect to your PS3 first so the app knows its IP address.");
@@ -1064,3 +1072,592 @@ ipcMain.handle("webman:action", async (_event, action) => {
     clearTimeout(timeout);
   }
 });
+
+async function diagnoseDirectLan(payload) {
+  const ps3Ip = String(payload.ps3Ip || payload.host || "").trim();
+  if (!isValidIpv4(ps3Ip)) {
+    throw new Error("Enter the PS3 Ethernet IP address before running Direct LAN detection.");
+  }
+
+  const ps3Mac = normalizeMacForWindows(payload.ps3Mac || "");
+  const snapshot = await getNetworkSnapshot();
+  const adapter = chooseDirectLanAdapter(snapshot.adapters, payload.adapterName);
+  const adapterIps = adapter ? getAdapterIps(snapshot.ips, adapter.name) : [];
+  const recommendedPcIp = isValidIpv4(payload.pcIp)
+    ? String(payload.pcIp).trim()
+    : getRecommendedPcIp(ps3Ip);
+  const matchingIp = adapterIps.find((ipInfo) => isSameSubnet(ipInfo.ipAddress, ps3Ip, ipInfo.prefixLength));
+  const ps3Neighbor = findPs3Neighbor(snapshot.neighbors, ps3Ip, ps3Mac);
+  const ftp = matchingIp
+    ? await testTcpPort({ host: ps3Ip, port: Number(payload.port || 21), localAddress: matchingIp.ipAddress, timeoutMs: 1800 })
+    : { tested: false, ok: false, error: "PC Ethernet is not currently in the PS3 subnet." };
+  const scripts = buildDirectLanScripts({
+    adapterName: adapter?.name || "Ethernet",
+    ps3Ip,
+    ps3Mac,
+    pcIp: recommendedPcIp,
+    prefixLength: 24
+  });
+
+  return buildDirectLanReport({
+    platform: process.platform,
+    adapter,
+    adapterIps,
+    ps3Ip,
+    ps3Mac,
+    recommendedPcIp,
+    matchingIp,
+    ps3Neighbor,
+    ftp,
+    scripts
+  });
+}
+
+async function applyDirectLanMapping(payload) {
+  if (process.platform !== "win32") {
+    throw new Error("Direct LAN auto-map is currently available on Windows builds.");
+  }
+
+  const ps3Ip = String(payload.ps3Ip || payload.host || "").trim();
+  if (!isValidIpv4(ps3Ip)) {
+    throw new Error("Enter the PS3 Ethernet IP before auto-mapping.");
+  }
+
+  const ps3Mac = normalizeMacForWindows(payload.ps3Mac || "");
+  const snapshot = await getNetworkSnapshot();
+  const adapter = chooseDirectLanAdapter(snapshot.adapters, payload.adapterName);
+  if (!adapter) {
+    throw new Error("No active Ethernet adapter was detected.");
+  }
+
+  const pcIp = isValidIpv4(payload.pcIp) ? String(payload.pcIp).trim() : getRecommendedPcIp(ps3Ip);
+  const script = buildElevatedDirectLanScript({
+    action: "apply",
+    adapterName: adapter.name,
+    ps3Ip,
+    ps3Mac,
+    pcIp,
+    prefixLength: 24
+  });
+  const result = await runElevatedPowerShell(script, "direct-lan-apply");
+  const report = await diagnoseDirectLan({ ps3Ip, ps3Mac, pcIp, adapterName: adapter.name });
+
+  emitVaultEvent(result.ok ? "success" : "warn", result.ok
+    ? `Direct LAN auto-map applied for ${ps3Ip}.`
+    : `Direct LAN auto-map finished with a warning: ${result.error || "check the connection"}.`, result);
+
+  return {
+    ...result,
+    report,
+    adapterName: adapter.name,
+    ps3Ip,
+    ps3Mac,
+    pcIp
+  };
+}
+
+async function restoreDirectLanMapping(payload) {
+  if (process.platform !== "win32") {
+    throw new Error("Direct LAN restore is currently available on Windows builds.");
+  }
+
+  const ps3Ip = String(payload.ps3Ip || payload.host || "").trim();
+  if (!isValidIpv4(ps3Ip)) {
+    throw new Error("Enter the PS3 Ethernet IP before restoring Direct LAN settings.");
+  }
+
+  const snapshot = await getNetworkSnapshot();
+  const adapter = chooseDirectLanAdapter(snapshot.adapters, payload.adapterName);
+  if (!adapter) {
+    throw new Error("No active Ethernet adapter was detected.");
+  }
+
+  const pcIp = isValidIpv4(payload.pcIp) ? String(payload.pcIp).trim() : getRecommendedPcIp(ps3Ip);
+  const script = buildElevatedDirectLanScript({
+    action: "restore",
+    adapterName: adapter.name,
+    ps3Ip,
+    ps3Mac: normalizeMacForWindows(payload.ps3Mac || ""),
+    pcIp,
+    prefixLength: 24,
+    addedIp: payload.addedIp !== false,
+    addedRoute: payload.addedRoute !== false,
+    addedNeighbor: payload.addedNeighbor !== false
+  });
+  const result = await runElevatedPowerShell(script, "direct-lan-restore");
+  const report = await diagnoseDirectLan({ ps3Ip, ps3Mac: payload.ps3Mac, pcIp, adapterName: adapter.name });
+
+  emitVaultEvent(result.ok ? "success" : "warn", result.ok
+    ? `Direct LAN mapping restored for ${ps3Ip}.`
+    : `Direct LAN restore finished with a warning: ${result.error || "check adapter settings"}.`, result);
+
+  return {
+    ...result,
+    report,
+    adapterName: adapter.name,
+    ps3Ip,
+    pcIp
+  };
+}
+
+async function getNetworkSnapshot() {
+  if (process.platform !== "win32") {
+    return getPortableNetworkSnapshot();
+  }
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$adapters = @(Get-NetAdapter | Select-Object Name, ifIndex, Status, LinkSpeed, MacAddress, InterfaceDescription)
+$ips = @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' } | Select-Object InterfaceAlias, IPAddress, PrefixLength, PrefixOrigin, SuffixOrigin, AddressState)
+$neighbors = @(Get-NetNeighbor -AddressFamily IPv4 | Select-Object InterfaceAlias, IPAddress, LinkLayerAddress, State)
+[pscustomobject]@{
+  adapters = $adapters
+  ips = $ips
+  neighbors = $neighbors
+} | ConvertTo-Json -Depth 5 -Compress
+`;
+  const { stdout } = await runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    timeout: 12000
+  });
+  const parsed = JSON.parse(stdout || "{}");
+  return {
+    adapters: toArray(parsed.adapters).map(normalizeAdapter),
+    ips: toArray(parsed.ips).map(normalizeIpInfo),
+    neighbors: toArray(parsed.neighbors).map(normalizeNeighbor)
+  };
+}
+
+function getPortableNetworkSnapshot() {
+  const adapters = [];
+  const ips = [];
+  const interfaces = os.networkInterfaces();
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    const ipv4Addresses = (addresses || []).filter((address) => address.family === "IPv4" && !address.internal);
+    if (ipv4Addresses.length === 0) continue;
+    adapters.push({
+      name,
+      ifIndex: 0,
+      status: "Up",
+      linkSpeed: "",
+      macAddress: normalizeMacForWindows(ipv4Addresses[0].mac || ""),
+      description: name
+    });
+    for (const address of ipv4Addresses) {
+      ips.push({
+        interfaceAlias: name,
+        ipAddress: address.address,
+        prefixLength: netmaskToPrefix(address.netmask),
+        prefixOrigin: "",
+        suffixOrigin: "",
+        addressState: ""
+      });
+    }
+  }
+  return { adapters, ips, neighbors: [] };
+}
+
+function normalizeAdapter(adapter) {
+  return {
+    name: String(adapter.Name || adapter.name || ""),
+    ifIndex: Number(adapter.ifIndex || adapter.InterfaceIndex || 0),
+    status: String(adapter.Status || adapter.status || ""),
+    linkSpeed: String(adapter.LinkSpeed || adapter.linkSpeed || ""),
+    macAddress: normalizeMacForWindows(adapter.MacAddress || adapter.macAddress || ""),
+    description: String(adapter.InterfaceDescription || adapter.description || "")
+  };
+}
+
+function normalizeIpInfo(ipInfo) {
+  return {
+    interfaceAlias: String(ipInfo.InterfaceAlias || ipInfo.interfaceAlias || ""),
+    ipAddress: String(ipInfo.IPAddress || ipInfo.ipAddress || ""),
+    prefixLength: Number(ipInfo.PrefixLength || ipInfo.prefixLength || 24),
+    prefixOrigin: String(ipInfo.PrefixOrigin || ipInfo.prefixOrigin || ""),
+    suffixOrigin: String(ipInfo.SuffixOrigin || ipInfo.suffixOrigin || ""),
+    addressState: String(ipInfo.AddressState || ipInfo.addressState || "")
+  };
+}
+
+function normalizeNeighbor(neighbor) {
+  return {
+    interfaceAlias: String(neighbor.InterfaceAlias || neighbor.interfaceAlias || ""),
+    ipAddress: String(neighbor.IPAddress || neighbor.ipAddress || ""),
+    linkLayerAddress: normalizeMacForWindows(neighbor.LinkLayerAddress || neighbor.linkLayerAddress || ""),
+    state: String(neighbor.State || neighbor.state || "")
+  };
+}
+
+function chooseDirectLanAdapter(adapters, requestedName) {
+  const normalizedRequested = String(requestedName || "").trim().toLowerCase();
+  if (normalizedRequested) {
+    const requested = adapters.find((adapter) => adapter.name.toLowerCase() === normalizedRequested);
+    if (requested) return requested;
+  }
+
+  const upAdapters = adapters.filter((adapter) => adapter.status.toLowerCase() === "up");
+  const usableAdapters = upAdapters.filter((adapter) => {
+    const text = `${adapter.name} ${adapter.description}`.toLowerCase();
+    return !/(wi-?fi|wireless|bluetooth|loopback|vpn|virtualbox|hyper-v|vmware|wintun|tap)/u.test(text);
+  });
+  const ethernet = usableAdapters.find((adapter) => /ethernet|realtek|intel|killer|gbe|2\.5gbe/u.test(`${adapter.name} ${adapter.description}`.toLowerCase()));
+  return ethernet || usableAdapters[0] || upAdapters[0] || adapters[0] || null;
+}
+
+function getAdapterIps(ips, adapterName) {
+  const normalizedName = String(adapterName || "").toLowerCase();
+  return ips
+    .filter((ipInfo) => ipInfo.interfaceAlias.toLowerCase() === normalizedName && isValidIpv4(ipInfo.ipAddress))
+    .sort((a, b) => Number(isApipaAddress(a.ipAddress)) - Number(isApipaAddress(b.ipAddress)));
+}
+
+function findPs3Neighbor(neighbors, ps3Ip, ps3Mac) {
+  const normalizedMac = normalizeMacForWindows(ps3Mac);
+  return neighbors.find((neighbor) => {
+    if (neighbor.ipAddress === ps3Ip) return true;
+    return normalizedMac && neighbor.linkLayerAddress === normalizedMac;
+  }) || null;
+}
+
+function buildDirectLanReport({
+  platform,
+  adapter,
+  adapterIps,
+  ps3Ip,
+  ps3Mac,
+  recommendedPcIp,
+  matchingIp,
+  ps3Neighbor,
+  ftp,
+  scripts
+}) {
+  const currentIps = adapterIps.map((ipInfo) => `${ipInfo.ipAddress}/${ipInfo.prefixLength}`);
+  const steps = [];
+  steps.push(adapter
+    ? {
+        level: adapter.status.toLowerCase() === "up" ? "ok" : "warn",
+        label: `Ethernet adapter: ${adapter.name}`,
+        detail: `${adapter.status || "Unknown"}${adapter.linkSpeed ? ` at ${adapter.linkSpeed}` : ""}`
+      }
+    : {
+        level: "error",
+        label: "No Ethernet adapter detected",
+        detail: "Plug the PS3 into the PC Ethernet port and run detection again."
+      });
+
+  steps.push(currentIps.length
+    ? {
+        level: matchingIp ? "ok" : "warn",
+        label: "PC Ethernet IP",
+        detail: matchingIp
+          ? `${matchingIp.ipAddress}/${matchingIp.prefixLength} is already in the PS3 subnet.`
+          : `${currentIps.join(", ")} is not in the ${ps3Ip}/24 subnet.`
+      }
+    : {
+        level: "warn",
+        label: "PC Ethernet IP",
+        detail: `Auto-map will add ${recommendedPcIp}/24 for this PS3 link.`
+      });
+
+  if (ps3Mac) {
+    steps.push(ps3Neighbor
+      ? {
+          level: "ok",
+          label: "PS3 MAC seen",
+          detail: `${formatMacForDisplay(ps3Neighbor.linkLayerAddress)} on ${ps3Neighbor.interfaceAlias || "a local adapter"}.`
+        }
+      : {
+          level: "warn",
+          label: "PS3 MAC not seen yet",
+          detail: `Auto-map can pin ${formatMacForDisplay(ps3Mac)} to ${ps3Ip} after the IP route is created.`
+        });
+  }
+
+  steps.push(ftp.tested
+    ? {
+        level: ftp.ok ? "ok" : "warn",
+        label: "FTP probe",
+        detail: ftp.ok ? `Port 21 answered at ${ps3Ip}.` : ftp.error || `Port 21 did not answer at ${ps3Ip}.`
+      }
+    : {
+        level: "warn",
+        label: "FTP probe skipped",
+        detail: ftp.error || "Auto-map first, then probe again."
+      });
+
+  const summary = matchingIp
+    ? (ftp.ok ? `Direct LAN looks ready for ${ps3Ip}.` : `Ethernet is mapped to ${ps3Ip}; FTP did not answer yet.`)
+    : `Auto-map can add ${recommendedPcIp}/24 and route only ${ps3Ip} over Ethernet.`;
+
+  return {
+    platform,
+    adapter,
+    adapterIps,
+    ps3Ip,
+    ps3Mac,
+    ps3MacDisplay: formatMacForDisplay(ps3Mac),
+    ps3MacSeen: Boolean(ps3Neighbor),
+    ps3Neighbor,
+    sameSubnet: Boolean(matchingIp),
+    recommendedPcIp,
+    ftp,
+    summary,
+    steps,
+    applyScript: scripts.applyScript,
+    restoreScript: scripts.restoreScript
+  };
+}
+
+function buildDirectLanScripts({ adapterName, ps3Ip, ps3Mac, pcIp, prefixLength }) {
+  const applyScript = [
+    `$adapter = ${psQuote(adapterName)}`,
+    `$ps3Ip = ${psQuote(ps3Ip)}`,
+    `$ps3Mac = ${psQuote(ps3Mac)}`,
+    `$pcIp = ${psQuote(pcIp)}`,
+    `$prefix = ${Number(prefixLength) || 24}`,
+    "if (-not (Get-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -ErrorAction SilentlyContinue)) {",
+    "  New-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -PrefixLength $prefix | Out-Null",
+    "}",
+    "if (-not (Get-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -ErrorAction SilentlyContinue)) {",
+    "  New-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -NextHop 0.0.0.0 -RouteMetric 1 | Out-Null",
+    "}",
+    "if ($ps3Mac) {",
+    "  netsh interface ipv4 delete neighbors \"$adapter\" $ps3Ip 2>$null | Out-Null",
+    "  netsh interface ipv4 add neighbors \"$adapter\" $ps3Ip $ps3Mac | Out-Null",
+    "}",
+    "Test-NetConnection -ComputerName $ps3Ip -Port 21"
+  ].join("\n");
+
+  const restoreScript = [
+    `$adapter = ${psQuote(adapterName)}`,
+    `$ps3Ip = ${psQuote(ps3Ip)}`,
+    `$pcIp = ${psQuote(pcIp)}`,
+    "Remove-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -Confirm:$false -ErrorAction SilentlyContinue",
+    "Remove-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -Confirm:$false -ErrorAction SilentlyContinue",
+    "netsh interface ipv4 delete neighbors \"$adapter\" $ps3Ip 2>$null | Out-Null"
+  ].join("\n");
+
+  return { applyScript, restoreScript };
+}
+
+function buildElevatedDirectLanScript({
+  action,
+  adapterName,
+  ps3Ip,
+  ps3Mac,
+  pcIp,
+  prefixLength,
+  addedIp = true,
+  addedRoute = true,
+  addedNeighbor = true
+}) {
+  const resultObject = "$result";
+  const header = [
+    "$ErrorActionPreference = 'Stop'",
+    `$resultPath = ${psQuote("")}`,
+    "try {",
+    `  $adapter = ${psQuote(adapterName)}`,
+    `  $ps3Ip = ${psQuote(ps3Ip)}`,
+    `  $ps3Mac = ${psQuote(ps3Mac)}`,
+    `  $pcIp = ${psQuote(pcIp)}`,
+    `  $prefix = ${Number(prefixLength) || 24}`
+  ];
+
+  const applyLines = [
+    "  $existingIp = Get-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -ErrorAction SilentlyContinue",
+    "  $addedIp = $false",
+    "  if (-not $existingIp) {",
+    "    New-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -PrefixLength $prefix | Out-Null",
+    "    $addedIp = $true",
+    "  }",
+    "  $existingRoute = Get-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -ErrorAction SilentlyContinue",
+    "  $addedRoute = $false",
+    "  if (-not $existingRoute) {",
+    "    New-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -NextHop 0.0.0.0 -RouteMetric 1 | Out-Null",
+    "    $addedRoute = $true",
+    "  }",
+    "  $addedNeighbor = $false",
+    "  if ($ps3Mac) {",
+    "    netsh interface ipv4 delete neighbors \"$adapter\" $ps3Ip 2>$null | Out-Null",
+    "    netsh interface ipv4 add neighbors \"$adapter\" $ps3Ip $ps3Mac | Out-Null",
+    "    $addedNeighbor = $true",
+    "  }",
+    "  Start-Sleep -Milliseconds 600",
+    "  $ftpOpen = Test-NetConnection -ComputerName $ps3Ip -Port 21 -InformationLevel Quiet -WarningAction SilentlyContinue",
+    `  ${resultObject} = [pscustomobject]@{ ok = $true; action = 'apply'; adapterName = $adapter; ps3Ip = $ps3Ip; ps3Mac = $ps3Mac; pcIp = $pcIp; addedIp = $addedIp; addedRoute = $addedRoute; addedNeighbor = $addedNeighbor; ftpOpen = $ftpOpen; finishedAt = (Get-Date).ToString('o') }`
+  ];
+
+  const restoreLines = [
+    `  $removeRoute = ${addedRoute ? "$true" : "$false"}`,
+    `  $removeIp = ${addedIp ? "$true" : "$false"}`,
+    `  $removeNeighbor = ${addedNeighbor ? "$true" : "$false"}`,
+    "  if ($removeRoute) {",
+    "    Remove-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -Confirm:$false -ErrorAction SilentlyContinue",
+    "  }",
+    "  if ($removeIp) {",
+    "    Remove-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -Confirm:$false -ErrorAction SilentlyContinue",
+    "  }",
+    "  if ($removeNeighbor) {",
+    "    netsh interface ipv4 delete neighbors \"$adapter\" $ps3Ip 2>$null | Out-Null",
+    "  }",
+    `  ${resultObject} = [pscustomobject]@{ ok = $true; action = 'restore'; adapterName = $adapter; ps3Ip = $ps3Ip; pcIp = $pcIp; removedIp = $removeIp; removedRoute = $removeRoute; removedNeighbor = $removeNeighbor; finishedAt = (Get-Date).ToString('o') }`
+  ];
+
+  const footer = [
+    "  $result | ConvertTo-Json -Depth 5 -Compress | Set-Content -Path $resultPath -Encoding UTF8",
+    "  exit 0",
+    "} catch {",
+    `  [pscustomobject]@{ ok = $false; action = ${psQuote(action)}; error = $_.Exception.Message; finishedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 -Compress | Set-Content -Path $resultPath -Encoding UTF8`,
+    "  exit 1",
+    "}"
+  ];
+
+  return {
+    action,
+    lines: [...header, ...(action === "restore" ? restoreLines : applyLines), ...footer]
+  };
+}
+
+async function runElevatedPowerShell(scriptInfo, name) {
+  const tempDir = path.join(os.tmpdir(), "JestersGameVault");
+  await fs.mkdir(tempDir, { recursive: true });
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const scriptPath = path.join(tempDir, `${name}-${stamp}.ps1`);
+  const resultPath = path.join(tempDir, `${name}-${stamp}.json`);
+  const scriptText = scriptInfo.lines
+    .join("\n")
+    .replace("$resultPath = ''", `$resultPath = ${psQuote(resultPath)}`);
+  await fs.writeFile(scriptPath, scriptText, "utf8");
+
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',${psQuote(scriptPath)}) -Verb RunAs -WindowStyle Hidden -Wait -PassThru`,
+    "if ($process.ExitCode -ne 0) { exit $process.ExitCode }"
+  ].join("\n");
+
+  let launchError = null;
+  try {
+    await runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
+      timeout: 180000
+    });
+  } catch (error) {
+    launchError = error;
+  }
+
+  let parsed = null;
+  try {
+    const rawResult = await fs.readFile(resultPath, "utf8");
+    parsed = JSON.parse(rawResult);
+  } catch {
+    // If UAC was cancelled there may be no result file to read.
+  }
+
+  await fs.rm(scriptPath, { force: true }).catch(() => {});
+  await fs.rm(resultPath, { force: true }).catch(() => {});
+
+  if (parsed) {
+    if (!parsed.ok) throw new Error(parsed.error || "Direct LAN mapping did not complete.");
+    return parsed;
+  }
+
+  if (launchError) {
+    throw new Error(`Windows did not complete the admin Direct LAN action: ${launchError.message}`);
+  }
+
+  throw new Error("Windows did not return a Direct LAN result.");
+}
+
+function runProcess(fileName, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(fileName, args, {
+      timeout: options.timeout || 10000,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function testTcpPort({ host, port, localAddress, timeoutMs }) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ tested: true, ...result });
+    };
+
+    socket.setTimeout(timeoutMs || 1800);
+    socket.once("connect", () => finish({ ok: true }));
+    socket.once("timeout", () => finish({ ok: false, error: `Timed out opening ${host}:${port}.` }));
+    socket.once("error", (error) => finish({ ok: false, error: error.message }));
+    socket.connect({ host, port, localAddress });
+  });
+}
+
+function isValidIpv4(value) {
+  const parts = String(value || "").trim().split(".");
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/u.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function ipToInt(ipAddress) {
+  return ipAddress.split(".").reduce((value, part) => ((value << 8) + Number(part)) >>> 0, 0);
+}
+
+function prefixToMask(prefixLength) {
+  const prefix = Math.max(0, Math.min(Number(prefixLength) || 0, 32));
+  return prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+}
+
+function isSameSubnet(leftIp, rightIp, prefixLength) {
+  if (!isValidIpv4(leftIp) || !isValidIpv4(rightIp)) return false;
+  const mask = prefixToMask(prefixLength);
+  return (ipToInt(leftIp) & mask) === (ipToInt(rightIp) & mask);
+}
+
+function isApipaAddress(ipAddress) {
+  return String(ipAddress || "").startsWith("169.254.");
+}
+
+function getRecommendedPcIp(ps3Ip) {
+  const parts = ps3Ip.split(".").map(Number);
+  parts[3] = parts[3] === 250 ? 249 : 250;
+  return parts.join(".");
+}
+
+function netmaskToPrefix(netmask) {
+  if (!isValidIpv4(netmask)) return 24;
+  const bits = netmask
+    .split(".")
+    .map((part) => Number(part).toString(2).padStart(8, "0"))
+    .join("");
+  return bits.replace(/0+$/u, "").length;
+}
+
+function normalizeMacForWindows(value) {
+  const raw = String(value || "").trim();
+  const hex = raw.replace(/[^a-fA-F0-9]/gu, "").toUpperCase();
+  if (hex.length !== 12) return "";
+  return hex.match(/.{1,2}/gu).join("-");
+}
+
+function formatMacForDisplay(value) {
+  return normalizeMacForWindows(value).replace(/-/g, ":");
+}
+
+function psQuote(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function toArray(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}

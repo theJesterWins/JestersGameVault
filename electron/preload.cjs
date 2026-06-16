@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("vaultAPI", {
   verifyIsoKeyPair: (payload) => ipcRenderer.invoke("ftp:verify-iso-key-pair", payload),
   deleteRemote: (payload) => ipcRenderer.invoke("ftp:delete", payload),
   runSpeedTest: (payload) => ipcRenderer.invoke("ftp:speed-test", payload),
+  diagnoseDirectLan: (payload) => ipcRenderer.invoke("network:direct-lan-diagnose", payload),
+  applyDirectLan: (payload) => ipcRenderer.invoke("network:direct-lan-apply", payload),
+  restoreDirectLan: (payload) => ipcRenderer.invoke("network:direct-lan-restore", payload),
   webmanAction: (action) => ipcRenderer.invoke("webman:action", action),
   onTransferProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);

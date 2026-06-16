@@ -1629,9 +1629,15 @@ button {
   border-color: rgba(82, 223, 209, 0.32);
 }
 
-.confirm-dialog.about-dialog,
-.confirm-dialog.lan-dialog {
+.confirm-dialog.about-dialog {
   width: min(620px, 100%);
+  border-color: rgba(82, 223, 209, 0.32);
+}
+
+.confirm-dialog.lan-dialog {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 44px);
+  overflow: auto;
   border-color: rgba(82, 223, 209, 0.32);
 }
 
@@ -1718,6 +1724,96 @@ button {
   color: #dffaf6;
 }
 
+.lan-form {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(210px, 1fr) minmax(130px, 0.8fr);
+  gap: 10px;
+}
+
+.lan-grid.lan-grid-wide {
+  grid-template-columns: 108px minmax(0, 1fr) 108px minmax(0, 1fr);
+}
+
+.lan-steps {
+  margin-top: 12px;
+  display: grid;
+  gap: 7px;
+}
+
+.lan-step {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.lan-step span {
+  display: block;
+  color: var(--text);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.lan-step p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.lan-step.ok {
+  border-color: rgba(116, 226, 72, 0.22);
+}
+
+.lan-step.warn {
+  border-color: rgba(244, 207, 74, 0.28);
+}
+
+.lan-step.error {
+  border-color: rgba(255, 107, 107, 0.32);
+}
+
+.lan-script-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lan-script {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.lan-script-header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lan-script-header strong {
+  font-size: 12px;
+}
+
+.lan-script pre {
+  margin: 0;
+  max-height: 128px;
+  overflow: auto;
+  padding: 9px;
+  color: #dffaf6;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
 .pair-check span {
   color: var(--muted);
   font-size: 12px;
@@ -1756,6 +1852,12 @@ button {
   background: rgba(244, 207, 74, 0.08);
 }
 
+.pair-result.error {
+  color: #ffd6d6;
+  border-color: rgba(255, 107, 107, 0.32);
+  background: rgba(255, 107, 107, 0.08);
+}
+
 .confirm-actions {
   grid-column: 2;
   display: flex;
@@ -1765,6 +1867,23 @@ button {
 
 .confirm-actions.key-actions {
   flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .confirm-dialog.lan-dialog {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .confirm-dialog.lan-dialog .confirm-icon,
+  .confirm-dialog.lan-dialog .confirm-actions {
+    grid-column: 1;
+  }
+
+  .lan-form,
+  .lan-script-grid,
+  .lan-grid.lan-grid-wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 1180px) {

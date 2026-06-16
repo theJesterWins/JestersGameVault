@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.11",
+  version: "0.1.12",
   electron: "",
   chrome: "",
   node: "",
@@ -120,7 +120,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.11-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.12-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -264,6 +264,37 @@ function createMockApi() {
       await wait(800);
       return { sizeBytes: 8_388_608, elapsedMs: 1800, bytesPerSecond: 4_660_337 };
     },
+    async diagnoseDirectLan(payload) {
+      await wait(400);
+      return makeMockDirectLanReport(payload);
+    },
+    async applyDirectLan(payload) {
+      await wait(700);
+      return {
+        ok: true,
+        action: "apply",
+        adapterName: "Ethernet",
+        ps3Ip: payload.ps3Ip,
+        ps3Mac: payload.ps3Mac,
+        pcIp: payload.pcIp || "192.168.1.250",
+        addedIp: true,
+        addedRoute: true,
+        addedNeighbor: Boolean(payload.ps3Mac),
+        ftpOpen: true,
+        report: makeMockDirectLanReport({ ...payload, pcIp: payload.pcIp || "192.168.1.250", mapped: true })
+      };
+    },
+    async restoreDirectLan(payload) {
+      await wait(500);
+      return {
+        ok: true,
+        action: "restore",
+        adapterName: "Ethernet",
+        ps3Ip: payload.ps3Ip,
+        pcIp: payload.pcIp || "192.168.1.250",
+        report: makeMockDirectLanReport(payload)
+      };
+    },
     async webmanAction(action) {
       await wait(300);
       return { action, ok: true, status: 200, url: `http://192.168.1.100/${action}.ps3` };
@@ -282,6 +313,87 @@ function createMockApi() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function makeMockDirectLanReport(payload = {}) {
+  const ps3Ip = payload.ps3Ip || "192.168.1.3";
+  const ps3Mac = payload.ps3Mac || "00:19:C5:67:A8:17";
+  const pcIp = payload.pcIp || "192.168.1.250";
+  const mapped = Boolean(payload.mapped);
+  return {
+    platform: "preview",
+    adapter: {
+      name: "Ethernet",
+      status: "Up",
+      linkSpeed: "1 Gbps",
+      macAddress: "04-7C-16-59-E9-83",
+      description: "Preview Ethernet adapter"
+    },
+    adapterIps: mapped
+      ? [{ interfaceAlias: "Ethernet", ipAddress: pcIp, prefixLength: 24 }]
+      : [{ interfaceAlias: "Ethernet", ipAddress: "169.254.212.146", prefixLength: 16 }],
+    ps3Ip,
+    ps3Mac,
+    ps3MacDisplay: ps3Mac,
+    ps3MacSeen: mapped,
+    ps3Neighbor: mapped ? { interfaceAlias: "Ethernet", ipAddress: ps3Ip, linkLayerAddress: ps3Mac.replace(/:/g, "-"), state: "Permanent" } : null,
+    sameSubnet: mapped,
+    recommendedPcIp: pcIp,
+    ftp: mapped
+      ? { tested: true, ok: true }
+      : { tested: false, ok: false, error: "PC Ethernet is not currently in the PS3 subnet." },
+    summary: mapped
+      ? `Direct LAN looks ready for ${ps3Ip}.`
+      : `Auto-map can add ${pcIp}/24 and route only ${ps3Ip} over Ethernet.`,
+    steps: [
+      { level: "ok", label: "Ethernet adapter: Ethernet", detail: "Up at 1 Gbps" },
+      mapped
+        ? { level: "ok", label: "PC Ethernet IP", detail: `${pcIp}/24 is already in the PS3 subnet.` }
+        : { level: "warn", label: "PC Ethernet IP", detail: `169.254.212.146/16 is not in the ${ps3Ip}/24 subnet.` },
+      mapped
+        ? { level: "ok", label: "PS3 MAC seen", detail: `${ps3Mac} on Ethernet.` }
+        : { level: "warn", label: "PS3 MAC not seen yet", detail: `Auto-map can pin ${ps3Mac} to ${ps3Ip}.` },
+      mapped
+        ? { level: "ok", label: "FTP probe", detail: `Port 21 answered at ${ps3Ip}.` }
+        : { level: "warn", label: "FTP probe skipped", detail: "Auto-map first, then probe again." }
+    ],
+    applyScript: [
+      "$adapter = 'Ethernet'",
+      `$ps3Ip = '${ps3Ip}'`,
+      `$ps3Mac = '${ps3Mac.replace(/:/g, "-")}'`,
+      `$pcIp = '${pcIp}'`,
+      "$prefix = 24",
+      "New-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -PrefixLength $prefix",
+      "New-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -NextHop 0.0.0.0 -RouteMetric 1",
+      "netsh interface ipv4 add neighbors \"$adapter\" $ps3Ip $ps3Mac"
+    ].join("\n"),
+    restoreScript: [
+      "$adapter = 'Ethernet'",
+      `$ps3Ip = '${ps3Ip}'`,
+      `$pcIp = '${pcIp}'`,
+      "Remove-NetRoute -DestinationPrefix \"$ps3Ip/32\" -InterfaceAlias $adapter -Confirm:$false",
+      "Remove-NetIPAddress -InterfaceAlias $adapter -IPAddress $pcIp -Confirm:$false",
+      "netsh interface ipv4 delete neighbors \"$adapter\" $ps3Ip"
+    ].join("\n")
+  };
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("Clipboard is unavailable.");
 }
 
 const api = window.vaultAPI || createMockApi();
@@ -317,6 +429,15 @@ function App() {
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [keyPairCandidate, setKeyPairCandidate] = useState(null);
   const [directLanOpen, setDirectLanOpen] = useState(false);
+  const [directLanDraft, setDirectLanDraft] = useState({
+    ps3Ip: "192.168.1.3",
+    ps3Mac: "00:19:C5:67:A8:17",
+    pcIp: "192.168.1.250"
+  });
+  const [directLanReport, setDirectLanReport] = useState(null);
+  const [directLanBusy, setDirectLanBusy] = useState("");
+  const [directLanMapping, setDirectLanMapping] = useState(null);
+  const [directLanCopied, setDirectLanCopied] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState("attention");
@@ -1336,17 +1457,114 @@ function App() {
     await refreshRemote(normalizedPath);
   }
 
-  function useDirectLanPreset() {
+  function getDirectLanPayload(draft = directLanDraft) {
+    return {
+      ps3Ip: (draft.ps3Ip || "").trim(),
+      ps3Mac: (draft.ps3Mac || "").trim(),
+      pcIp: (draft.pcIp || "").trim(),
+      port: connection.port || "21"
+    };
+  }
+
+  function mergeDirectLanReport(report) {
+    if (!report) return;
+    setDirectLanReport(report);
+    setDirectLanDraft((current) => ({
+      ...current,
+      ps3Ip: report.ps3Ip || current.ps3Ip,
+      ps3Mac: report.ps3MacDisplay || report.ps3Mac || current.ps3Mac,
+      pcIp: report.recommendedPcIp || current.pcIp
+    }));
+  }
+
+  async function diagnoseDirectLan() {
+    const payload = getDirectLanPayload();
+    setDirectLanBusy("detect");
+    try {
+      const report = await api.diagnoseDirectLan(payload);
+      mergeDirectLanReport(report);
+      setStatus(report.summary || "Direct LAN detection finished.");
+      pushEvent(report.sameSubnet ? "success" : "warn", report.summary || "Direct LAN detection finished.");
+    } catch (error) {
+      setStatus(`Direct LAN detection failed: ${error.message}`);
+      pushEvent("error", `Direct LAN detection failed: ${error.message}`);
+    } finally {
+      setDirectLanBusy("");
+    }
+  }
+
+  async function runDirectLanApply() {
+    const payload = getDirectLanPayload();
+    setDirectLanBusy("apply");
+    try {
+      const result = await api.applyDirectLan(payload);
+      mergeDirectLanReport(result.report);
+      setDirectLanMapping(result);
+      setConnection((current) => ({
+        ...current,
+        host: result.ps3Ip || payload.ps3Ip,
+        port: "21",
+        username: current.username || "anonymous",
+        password: current.password || ""
+      }));
+      const message = result.ftpOpen
+        ? `Direct LAN mapped and FTP answered at ${result.ps3Ip || payload.ps3Ip}.`
+        : `Direct LAN mapped for ${result.ps3Ip || payload.ps3Ip}. Connect when webMAN FTP is ready.`;
+      setStatus(message);
+      pushEvent(result.ftpOpen ? "success" : "warn", message);
+    } catch (error) {
+      setStatus(`Direct LAN auto-map failed: ${error.message}`);
+      pushEvent("error", `Direct LAN auto-map failed: ${error.message}`);
+    } finally {
+      setDirectLanBusy("");
+    }
+  }
+
+  async function runDirectLanRestore() {
+    const payload = {
+      ...getDirectLanPayload(),
+      ...directLanMapping
+    };
+    setDirectLanBusy("restore");
+    try {
+      const result = await api.restoreDirectLan(payload);
+      mergeDirectLanReport(result.report);
+      setDirectLanMapping(null);
+      setStatus(`Direct LAN mapping restored for ${result.ps3Ip || payload.ps3Ip}.`);
+      pushEvent("success", `Direct LAN mapping restored for ${result.ps3Ip || payload.ps3Ip}.`);
+    } catch (error) {
+      setStatus(`Direct LAN restore failed: ${error.message}`);
+      pushEvent("error", `Direct LAN restore failed: ${error.message}`);
+    } finally {
+      setDirectLanBusy("");
+    }
+  }
+
+  async function copyDirectLanScript(kind) {
+    const text = kind === "restore" ? directLanReport?.restoreScript : directLanReport?.applyScript;
+    if (!text) return;
+    try {
+      await copyTextToClipboard(text);
+      setDirectLanCopied(kind);
+      setStatus(`${kind === "restore" ? "Restore" : "Apply"} script copied.`);
+      setTimeout(() => setDirectLanCopied(""), 1800);
+    } catch (error) {
+      setStatus(`Copy failed: ${error.message}`);
+      pushEvent("error", `Copy failed: ${error.message}`);
+    }
+  }
+
+  function useDirectLanPreset(targetHost = directLanDraft.ps3Ip || "192.168.1.3") {
     setConnection((current) => ({
       ...current,
-      host: "192.168.50.2",
+      host: targetHost,
       port: "21",
       username: "anonymous",
       password: ""
     }));
     setDirectLanOpen(false);
-    setStatus("Direct Ethernet preset loaded. Set PC Ethernet to 192.168.50.1, then connect.");
-    pushEvent("info", "Direct Ethernet preset loaded.");
+    setStatus(`Direct LAN target loaded: ${targetHost}.`);
+    pushEvent("info", `Direct LAN target loaded: ${targetHost}.`);
   }
 
   function clearCompleted() {
@@ -1696,7 +1914,17 @@ function App() {
       {directLanOpen ? (
         <DirectLanDialog
           connection={connection}
-          onApplyPreset={useDirectLanPreset}
+          draft={directLanDraft}
+          report={directLanReport}
+          busy={directLanBusy}
+          mapping={directLanMapping}
+          copied={directLanCopied}
+          onDraftChange={(patch) => setDirectLanDraft((current) => ({ ...current, ...patch }))}
+          onDetect={diagnoseDirectLan}
+          onApplyMap={runDirectLanApply}
+          onRestoreMap={runDirectLanRestore}
+          onCopyScript={copyDirectLanScript}
+          onApplyPreset={() => useDirectLanPreset(directLanDraft.ps3Ip || "192.168.1.3")}
           onClose={() => setDirectLanOpen(false)}
           onSpeedTest={runSpeedTest}
         />
@@ -2438,7 +2666,26 @@ function KeyPairDialog({ candidate, onChooseKey, onUploadIsoOnly, onCancel, onCo
   );
 }
 
-function DirectLanDialog({ connection, onApplyPreset, onClose, onSpeedTest }) {
+function DirectLanDialog({
+  connection,
+  draft,
+  report,
+  busy,
+  mapping,
+  copied,
+  onDraftChange,
+  onDetect,
+  onApplyMap,
+  onRestoreMap,
+  onCopyScript,
+  onApplyPreset,
+  onClose,
+  onSpeedTest
+}) {
+  const adapterIps = report?.adapterIps?.map((ipInfo) => `${ipInfo.ipAddress}/${ipInfo.prefixLength}`).join(", ") || "Not detected";
+  const reportTone = report?.sameSubnet ? "ok" : "warn";
+  const busyLabel = busy === "detect" ? "Detecting" : busy === "apply" ? "Mapping" : busy === "restore" ? "Restoring" : "";
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="confirm-dialog lan-dialog" role="dialog" aria-modal="true" aria-labelledby="lan-title">
@@ -2447,32 +2694,115 @@ function DirectLanDialog({ connection, onApplyPreset, onClose, onSpeedTest }) {
         </div>
         <div className="confirm-copy">
           <h2 id="lan-title">Direct LAN</h2>
-          <div className="lan-grid">
-            <span>PC Ethernet</span>
-            <code>192.168.50.1</code>
-            <span>PS3 Ethernet</span>
-            <code>192.168.50.2</code>
+          <div className="lan-form">
+            <LabeledInput
+              label="PS3 IP"
+              value={draft.ps3Ip}
+              onChange={(ps3Ip) => onDraftChange({ ps3Ip })}
+              placeholder="192.168.1.3"
+            />
+            <LabeledInput
+              label="PS3 MAC"
+              value={draft.ps3Mac}
+              onChange={(ps3Mac) => onDraftChange({ ps3Mac })}
+              placeholder="00:19:C5:67:A8:17"
+            />
+            <LabeledInput
+              label="PC IP to add"
+              value={draft.pcIp}
+              onChange={(pcIp) => onDraftChange({ pcIp })}
+              placeholder="192.168.1.250"
+            />
+          </div>
+
+          <div className={report ? `pair-result ${reportTone}` : "pair-result warn"}>
+            {busyLabel || report?.summary || "Run detection to map this PC Ethernet port to the PS3 link."}
+          </div>
+
+          <div className="lan-grid lan-grid-wide">
+            <span>Adapter</span>
+            <code>{report?.adapter?.name || "Not detected"}</code>
+            <span>Ethernet IP</span>
+            <code>{adapterIps}</code>
+            <span>PS3 target</span>
+            <code>{draft.ps3Ip || "Not set"}</code>
+            <span>PS3 MAC</span>
+            <code>{report?.ps3MacDisplay || draft.ps3Mac || "Optional"}</code>
+            <span>FTP probe</span>
+            <code>{report?.ftp?.tested ? (report.ftp.ok ? "Port 21 open" : "No answer yet") : "Not tested"}</code>
             <span>App target</span>
             <code>{connection.host || "Not set"}</code>
           </div>
-          <div className="pair-result ok">
-            Wired FTP is most stable with one transfer at a time.
-          </div>
+
+          {report?.steps?.length ? (
+            <div className="lan-steps" aria-label="Direct LAN checks">
+              {report.steps.map((step) => (
+                <div className={`lan-step ${step.level}`} key={`${step.label}-${step.detail}`}>
+                  <span>{step.label}</span>
+                  <p>{step.detail}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {report ? (
+            <div className="lan-script-grid">
+              <DirectLanScript
+                title="Apply"
+                text={report.applyScript}
+                copied={copied === "apply"}
+                onCopy={() => onCopyScript("apply")}
+              />
+              <DirectLanScript
+                title="Restore"
+                text={report.restoreScript}
+                copied={copied === "restore"}
+                onCopy={() => onCopyScript("restore")}
+              />
+            </div>
+          ) : null}
         </div>
         <div className="confirm-actions key-actions">
           <button className="button secondary" type="button" onClick={onClose}>
             Close
           </button>
+          <button className="button secondary" type="button" onClick={onDetect} disabled={Boolean(busy)}>
+            <RefreshCw size={16} />
+            Detect Ethernet
+          </button>
+          <button className="button secondary" type="button" onClick={onApplyPreset} disabled={!draft.ps3Ip || Boolean(busy)}>
+            <Router size={16} />
+            Use Target
+          </button>
           <button className="button secondary" type="button" onClick={onSpeedTest}>
             <Cable size={16} />
             Speed Test
           </button>
-          <button className="button primary" type="button" onClick={onApplyPreset}>
+          <button className="button secondary warning" type="button" onClick={onRestoreMap} disabled={!mapping || Boolean(busy)}>
+            <X size={16} />
+            Restore Map
+          </button>
+          <button className="button primary" type="button" onClick={onApplyMap} disabled={!draft.ps3Ip || Boolean(busy)}>
             <Router size={16} />
-            Apply Preset
+            {busy === "apply" ? "Mapping" : "Auto-map"}
           </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+function DirectLanScript({ title, text, copied, onCopy }) {
+  return (
+    <div className="lan-script">
+      <div className="lan-script-header">
+        <strong>{title}</strong>
+        <button className="button secondary compact" type="button" onClick={onCopy} disabled={!text}>
+          <ClipboardCheck size={14} />
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre>{text || "Run detection first."}</pre>
     </div>
   );
 }
