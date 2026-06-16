@@ -41,8 +41,30 @@ const PS3_PATHS = [
 
 const PROFILE_STORAGE_KEY = "jgv.ps3Profiles";
 const SETTINGS_STORAGE_KEY = "jgv.settings";
+const LAYOUT_STORAGE_KEY = "jgv.layout";
+const SPEED_HISTORY_STORAGE_KEY = "jgv.speedHistory";
 const DEFAULT_SETTINGS = {
-  refreshAfterUpload: false
+  refreshAfterUpload: false,
+  safePartUploads: true,
+  verifyAfterTransfer: true,
+  preflightChecks: true,
+  autoRetryTransfers: true,
+  retryCount: 2,
+  trackSpeedHistory: true
+};
+const MAX_SPEED_HISTORY = 24;
+const DEFAULT_APP_INFO = {
+  name: "Jester's Game Vault",
+  version: "0.1.8",
+  electron: "",
+  chrome: "",
+  node: "",
+  packaged: false
+};
+const DEFAULT_LAYOUT = {
+  localShare: 52,
+  queueHeight: 320,
+  logHeight: 126
 };
 
 const SAMPLE_LOCAL = [
@@ -87,6 +109,9 @@ function createMockApi() {
   const mockFailureMode = new window.URLSearchParams(window.location.search).has("mockFailure");
 
   return {
+    async getAppInfo() {
+      return { ...DEFAULT_APP_INFO, version: "0.1.8-preview" };
+    },
     async listLocal(targetPath) {
       return {
         path: targetPath || "",
@@ -95,7 +120,7 @@ function createMockApi() {
       };
     },
     async pickLocalFolder() {
-      return "";
+      return "C:\\Backups";
     },
     async pickLocalFiles() {
       const picked = mockFailureMode
@@ -109,6 +134,31 @@ function createMockApi() {
       return picked.map((entry) => ({
         ...entry,
         path: `C:\\Backups\\${entry.name}`
+      }));
+    },
+    async expandLocalEntries(entries) {
+      const files = entries.flatMap((entry) => {
+        if (!entry.isDirectory) return [{ ...entry, relativePath: entry.relativePath || entry.name, rootName: entry.name }];
+        return [
+          file("folder_game.iso", "ISO", 2_400_000_000, new Date().toISOString()),
+          file("folder_notes.txt", "Text", 2_048, new Date().toISOString())
+        ].map((nested) => ({
+          ...nested,
+          path: `${entry.path}\\${nested.name}`,
+          relativePath: `${entry.name}/${nested.name}`,
+          rootName: entry.name
+        }));
+      });
+      return { files, errors: [] };
+    },
+    async describeLocalPaths(paths) {
+      return paths.map((filePath) => ({
+        name: fileNameFromPath(filePath),
+        path: filePath,
+        isDirectory: false,
+        size: 42_000_000,
+        modifiedAt: new Date().toISOString(),
+        type: fileTypeFromName(filePath)
       }));
     },
     async pickLocalKeyFile() {
@@ -142,9 +192,17 @@ function createMockApi() {
         entries: SAMPLE_REMOTE.map((entry) => ({ ...entry, path: `${remotePath}${entry.name}` }))
       };
     },
+    async preflightUpload(payload) {
+      await wait(75);
+      return {
+        ok: true,
+        remotePath: `${payload.remoteDir}${payload.remoteName || payload.remoteRelativePath || payload.localPath.split("\\").pop()}`,
+        warnings: payload.remoteName?.includes("existing") ? ["Existing file will be replaced"] : []
+      };
+    },
     async uploadToRemote(payload) {
       await wait(mockFailureMode ? 350 : 900);
-      const remoteName = payload.remoteName || payload.localPath.split("\\").pop();
+      const remoteName = payload.remoteName || payload.remoteRelativePath || payload.localPath.split("\\").pop();
       if (mockFailureMode && remoteName === "queue_fail_middle.iso") {
         throw new Error("Mock transfer failed for queue isolation QA.");
       }
@@ -152,8 +210,25 @@ function createMockApi() {
         id: payload.id,
         remotePath: `${payload.remoteDir}${remoteName}`,
         remoteName,
-        bytes: 42_000_000,
-        elapsedMs: 900
+        bytes: payload.size || 42_000_000,
+        elapsedMs: 900,
+        bytesPerSecond: Math.round((payload.size || 42_000_000) / 0.9),
+        verified: payload.verifySize !== false,
+        usedPartFile: payload.usePartFile !== false
+      };
+    },
+    async downloadFromRemote(payload) {
+      await wait(700);
+      const bytes = payload.size || 64_000_000;
+      return {
+        id: payload.id,
+        remotePath: payload.remotePath,
+        localPath: `${payload.localDir}\\${fileNameFromPath(payload.remotePath)}`,
+        bytes,
+        elapsedMs: 700,
+        bytesPerSecond: Math.round(bytes / 0.7),
+        verified: payload.verifySize !== false,
+        usedPartFile: payload.usePartFile !== false
       };
     },
     async cancelTransfer() {
@@ -187,6 +262,9 @@ function createMockApi() {
     },
     onVaultEvent() {
       return () => {};
+    },
+    onShowAbout() {
+      return () => {};
     }
   };
 }
@@ -209,7 +287,7 @@ function App() {
   });
   const [status, setStatus] = useState("Ready for PS3 FTP.");
   const [local, setLocal] = useState({ path: "", parent: null, entries: [] });
-  const [remote, setRemote] = useState({ path: "/dev_hdd0/PS2ISO/", parent: null, entries: [] });
+  const [remote, setRemote] = useState({ path: "/dev_hdd0/PS3ISO/", parent: null, entries: [] });
   const [selectedLocal, setSelectedLocal] = useState(null);
   const [selectedRemote, setSelectedRemote] = useState(null);
   const [queue, setQueue] = useState([]);
@@ -219,8 +297,13 @@ function App() {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [profileName, setProfileName] = useState("");
   const [settings, setSettings] = useState(() => readStoredSettings());
+  const [layout, setLayout] = useState(() => readStoredLayout());
+  const [speedHistory, setSpeedHistory] = useState(() => readStoredSpeedHistory());
+  const [appInfo, setAppInfo] = useState(DEFAULT_APP_INFO);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [keyPairCandidate, setKeyPairCandidate] = useState(null);
+  const [directLanOpen, setDirectLanOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [remoteDragActive, setRemoteDragActive] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -277,7 +360,7 @@ function App() {
   }, [refreshLocal]);
 
   useEffect(() => {
-    if (!window.vaultAPI) refreshRemote("/dev_hdd0/PS2ISO/");
+    if (!window.vaultAPI) refreshRemote("/dev_hdd0/PS3ISO/");
   }, [refreshRemote]);
 
   useEffect(() => {
@@ -288,6 +371,7 @@ function App() {
             ? {
                 ...item,
                 progress: progress.percent,
+                size: progress.totalBytes || item.size,
                 bytesTransferred: progress.bytesOverall,
                 bytesPerSecond: progress.bytesPerSecond,
                 remainingMs: progress.remainingMs,
@@ -321,6 +405,25 @@ function App() {
   useEffect(() => {
     writeStoredSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    writeStoredLayout(layout);
+  }, [layout]);
+
+  useEffect(() => {
+    writeStoredSpeedHistory(speedHistory);
+  }, [speedHistory]);
+
+  useEffect(() => {
+    api.getAppInfo?.().then((info) => {
+      setAppInfo({ ...DEFAULT_APP_INFO, ...info });
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const cleanup = api.onShowAbout?.(() => setAboutOpen(true));
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     if (!window.vaultAPI) return undefined;
@@ -451,6 +554,19 @@ function App() {
     setStatus(profile ? `Deleted profile: ${profile.name}.` : "Deleted saved profile.");
   }
 
+  function recordSpeedSample(sample) {
+    if (!settings.trackSpeedHistory || !sample?.bytesPerSecond) return;
+    setSpeedHistory((items) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        createdAt: new Date().toISOString(),
+        host: connection.host || "preview",
+        ...sample
+      },
+      ...items
+    ].slice(0, MAX_SPEED_HISTORY));
+  }
+
   async function runVaultDoctor() {
     const needsAttention = doctorReport.issues.filter((issue) => issue.severity !== "ok").length;
     setStatus(needsAttention ? `Vault Doctor found ${needsAttention} item(s) to check.` : "Vault Doctor found no issues in this view.");
@@ -474,30 +590,31 @@ function App() {
     setRemoteDragActive(false);
 
     const droppedFiles = Array.from(event.dataTransfer.files || []);
-    const entries = droppedFiles.map((fileItem) => {
-      const filePath = api.getDroppedFilePath?.(fileItem) || fileItem.path || "";
-      return {
-        name: fileItem.name,
-        path: filePath,
-        isDirectory: false,
-        size: fileItem.size,
-        modifiedAt: new Date(fileItem.lastModified || Date.now()).toISOString(),
-        type: fileTypeFromName(fileItem.name)
-      };
-    });
+    const droppedPaths = droppedFiles.map((fileItem) => api.getDroppedFilePath?.(fileItem) || fileItem.path || "").filter(Boolean);
 
-    if (entries.some((entry) => !entry.path)) {
+    if (droppedPaths.length !== droppedFiles.length) {
       setStatus("Those files dropped in, but Electron did not expose their Windows paths. Use Choose files instead.");
       pushEvent("warn", "Dropped files did not expose Windows paths. Use Choose files instead.");
       return;
     }
 
+    const entries = window.vaultAPI
+      ? await api.describeLocalPaths(droppedPaths)
+      : droppedFiles.map((fileItem, index) => ({
+          name: fileItem.name,
+          path: droppedPaths[index],
+          isDirectory: false,
+          size: fileItem.size,
+          modifiedAt: new Date(fileItem.lastModified || Date.now()).toISOString(),
+          type: fileTypeFromName(fileItem.name)
+        }));
+
     await uploadEntries(entries, { promptForIsoKey: true });
   }
 
   async function transferSelected() {
-    if (!selectedLocalEntry || selectedLocalEntry.isDirectory) {
-      setStatus("Select a file from Local Files before transferring, or use Choose files.");
+    if (!selectedLocalEntry) {
+      setStatus("Select a file or folder from Local Files before transferring, or use Choose items.");
       return;
     }
 
@@ -506,10 +623,10 @@ function App() {
 
   async function uploadEntries(entries, options = {}) {
     const { promptForIsoKey = false } = options;
-    const files = entries.filter((entry) => entry?.path && !entry.isDirectory);
-    if (files.length === 0) {
-      setStatus("Choose one or more files to upload to the active PS3 folder.");
-      pushEvent("warn", "Upload skipped because no files were selected.");
+    const uploadableEntries = entries.filter((entry) => entry?.path);
+    if (uploadableEntries.length === 0) {
+      setStatus("Choose one or more files or folders to upload to the active PS3 folder.");
+      pushEvent("warn", "Upload skipped because no files or folders were selected.");
       return;
     }
 
@@ -519,10 +636,14 @@ function App() {
       return;
     }
 
-    const autoMatch = promptForIsoKey ? await withAutoMatchedKeys(files) : { files, candidate: null };
-    const filesForUpload = autoMatch.files;
-    const keyPairPrompt = promptForIsoKey && isPs3IsoTarget(remote.path)
-      ? autoMatch.candidate || getIsoKeyPairPrompt(filesForUpload)
+    const containsFolders = uploadableEntries.some((entry) => entry.isDirectory);
+    const directFiles = uploadableEntries.filter((entry) => !entry.isDirectory);
+    const autoMatch = promptForIsoKey && !containsFolders ? await withAutoMatchedKeys(directFiles) : { files: directFiles, candidate: null };
+    const entriesForUpload = containsFolders
+      ? [...uploadableEntries.filter((entry) => entry.isDirectory), ...autoMatch.files]
+      : autoMatch.files;
+    const keyPairPrompt = promptForIsoKey && !containsFolders && isPs3IsoTarget(remote.path)
+      ? autoMatch.candidate || getIsoKeyPairPrompt(autoMatch.files)
       : null;
     if (keyPairPrompt) {
       setKeyPairCandidate(keyPairPrompt);
@@ -531,12 +652,24 @@ function App() {
       return;
     }
 
+    const expanded = await api.expandLocalEntries(entriesForUpload);
+    const expandedFiles = Array.isArray(expanded) ? expanded : expanded.files || [];
+    const expandErrors = Array.isArray(expanded) ? [] : expanded.errors || [];
+    for (const error of expandErrors) {
+      pushEvent("error", `Folder expansion skipped ${error.source}: ${error.error}`);
+    }
+    if (expandedFiles.length === 0) {
+      setStatus("No uploadable files were found in that selection.");
+      pushEvent("warn", "Upload skipped because the selected folders did not contain files.");
+      return;
+    }
+
     const targetRemotePath = remote.path;
-    const queuedFiles = prepareUploadJobs(filesForUpload);
+    const queuedFiles = prepareUploadJobs(expandedFiles);
     const shouldVerifyIsoKeys = isPs3IsoTarget(targetRemotePath) && queuedFiles.some((job) => isPs3IsoKeyFile(job.remoteName));
-    const queuedRows = queuedFiles.map(({ entry, id, remoteName, note }) => ({
+    const queuedRows = queuedFiles.map(({ entry, id, remoteName, note, operation }) => ({
       id,
-      operation: isPs3IsoKeyFile(remoteName) ? "Transfer PS3 key" : "Transfer to PS3",
+      operation,
       source: entry.path,
       destination: `${targetRemotePath}${remoteName}`,
       size: entry.size,
@@ -557,7 +690,11 @@ function App() {
           queuedFiles,
           targetRemotePath,
           shouldVerifyIsoKeys,
-          refreshAfterUpload: settings.refreshAfterUpload
+          refreshAfterUpload: settings.refreshAfterUpload,
+          preflightChecks: settings.preflightChecks,
+          safePartUploads: settings.safePartUploads,
+          verifyAfterTransfer: settings.verifyAfterTransfer,
+          retryCount: settings.autoRetryTransfers ? settings.retryCount : 0
         })
       );
 
@@ -570,7 +707,16 @@ function App() {
     return uploadRunnerRef.current;
   }
 
-  async function runUploadBatch({ queuedFiles, targetRemotePath, shouldVerifyIsoKeys, refreshAfterUpload }) {
+  async function runUploadBatch({
+    queuedFiles,
+    targetRemotePath,
+    shouldVerifyIsoKeys,
+    refreshAfterUpload,
+    preflightChecks,
+    safePartUploads,
+    verifyAfterTransfer,
+    retryCount
+  }) {
     const uploadedJobs = [];
     let failedUploads = 0;
     let canceledUploads = 0;
@@ -598,12 +744,57 @@ function App() {
         items.map((item) => (item.id === id ? { ...item, status: "Transferring", note: item.note || "Starting" } : item))
       );
       try {
-        const result = await api.uploadToRemote({
-          id,
-          localPath: entry.path,
-          remoteDir: targetRemotePath,
-          remoteName
-        });
+        if (preflightChecks) {
+          try {
+            const preflight = await api.preflightUpload({
+              id,
+              localPath: entry.path,
+              remoteDir: targetRemotePath,
+              remoteName,
+              remoteRelativePath: remoteName
+            });
+            const note = preflight.warnings?.length ? preflight.warnings.join("; ") : "Preflight OK";
+            setQueue((items) => items.map((item) => (item.id === id ? { ...item, note } : item)));
+            if (preflight.warnings?.length) {
+              pushEvent("warn", `Preflight note for ${entry.name}: ${preflight.warnings.join("; ")}`);
+            }
+          } catch (error) {
+            pushEvent("warn", `Preflight failed for ${entry.name}: ${error.message}. Upload will try anyway.`);
+            setQueue((items) => items.map((item) => (item.id === id ? { ...item, note: "Preflight unavailable" } : item)));
+          }
+        }
+
+        const maxAttempts = Math.max(1, Number(retryCount || 0) + 1);
+        let result = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          if (canceledTransfersRef.current.has(id)) {
+            throw new Error("Transfer canceled by user.");
+          }
+          const attemptNote = maxAttempts > 1 ? `Attempt ${attempt}/${maxAttempts}` : "Transferring";
+          setQueue((items) => items.map((item) => (item.id === id ? { ...item, note: attemptNote } : item)));
+          try {
+            result = await api.uploadToRemote({
+              id,
+              localPath: entry.path,
+              remoteDir: targetRemotePath,
+              remoteName,
+              remoteRelativePath: remoteName,
+              size: entry.size,
+              usePartFile: safePartUploads,
+              verifySize: verifyAfterTransfer
+            });
+            break;
+          } catch (error) {
+            const message = error?.message || String(error);
+            const wasCanceled = canceledTransfersRef.current.has(id) || message.toLowerCase().includes("canceled");
+            if (wasCanceled || attempt === maxAttempts) throw error;
+            pushEvent("warn", `Transfer attempt ${attempt} failed for ${entry.name}: ${message}. Reconnecting and retrying.`);
+            setQueue((items) =>
+              items.map((item) => (item.id === id ? { ...item, note: `Retrying after reconnect (${attempt + 1}/${maxAttempts})` } : item))
+            );
+          }
+        }
+
         if (canceledTransfersRef.current.has(id)) {
           canceledUploads += 1;
           setQueue((items) =>
@@ -622,6 +813,13 @@ function App() {
           continue;
         }
         uploadedJobs.push({ entry, id, remoteName, result });
+        recordSpeedSample({
+          direction: "upload",
+          name: entry.name,
+          bytes: result.bytes || entry.size,
+          bytesPerSecond: result.bytesPerSecond,
+          target: targetRemotePath
+        });
         setQueue((items) =>
           items.map((item) =>
             item.id === id
@@ -629,8 +827,10 @@ function App() {
                   ...item,
                   destination: result.remotePath,
                   progress: 100,
-                  status: "Completed",
-                  elapsedMs: result.elapsedMs
+                  status: result.verified ? "Verified" : "Completed",
+                  elapsedMs: result.elapsedMs,
+                  bytesPerSecond: result.bytesPerSecond,
+                  note: result.verified ? "Size verified" : result.usedPartFile ? ".part rename complete" : "Complete"
                 }
               : item
           )
@@ -687,6 +887,180 @@ function App() {
     });
     setStatus(summary);
     pushEvent(failedUploads > 0 || canceledUploads > 0 ? "warn" : "success", summary);
+  }
+
+  async function downloadSelectedRemote() {
+    if (!selectedRemoteEntry) {
+      setStatus("Select a PS3 file or folder before transferring to PC.");
+      pushEvent("warn", "Download skipped because no PS3 item is selected.");
+      return;
+    }
+
+    if (!connection.connected && window.vaultAPI) {
+      setStatus("Connect to your PS3 before downloading remote files.");
+      pushEvent("warn", "Download blocked because the PS3 FTP session is not connected.");
+      return;
+    }
+
+    let targetLocalDir = local.path;
+    if (!targetLocalDir) {
+      targetLocalDir = await api.pickLocalFolder();
+      if (!targetLocalDir) {
+        setStatus("Choose a local folder before downloading from the PS3.");
+        return;
+      }
+      await refreshLocal(targetLocalDir);
+    }
+
+    const id = `${Date.now()}-download-${selectedRemoteEntry.name}`;
+    const job = {
+      id,
+      entry: selectedRemoteEntry,
+      localDir: targetLocalDir,
+      localPath: `${targetLocalDir}\\${selectedRemoteEntry.name}`
+    };
+    const row = {
+      id,
+      operation: selectedRemoteEntry.isDirectory ? "Download folder" : "Download to PC",
+      source: selectedRemoteEntry.path,
+      destination: job.localPath,
+      size: selectedRemoteEntry.size,
+      progress: 0,
+      status: "Queued",
+      note: selectedRemoteEntry.isDirectory ? "Recursive download" : "Waiting",
+      elapsedMs: 0
+    };
+
+    setQueue((items) => insertQueuedRows(items, [row]));
+    setStatus(`Queued download: ${selectedRemoteEntry.name}.`);
+    pushEvent("info", `Queued download for ${selectedRemoteEntry.path}.`);
+
+    const batchPromise = uploadRunnerRef.current
+      .catch(() => {})
+      .then(() => runDownloadBatch({
+        jobs: [job],
+        safePartUploads: settings.safePartUploads,
+        verifyAfterTransfer: settings.verifyAfterTransfer,
+        retryCount: settings.autoRetryTransfers ? settings.retryCount : 0
+      }));
+
+    uploadRunnerRef.current = batchPromise.catch((error) => {
+      const message = error?.message || String(error);
+      setStatus(`Queue worker failed: ${message}`);
+      pushEvent("error", `Queue worker failed: ${message}`);
+    });
+
+    return uploadRunnerRef.current;
+  }
+
+  async function runDownloadBatch({ jobs, safePartUploads, verifyAfterTransfer, retryCount }) {
+    let completed = 0;
+    let failed = 0;
+    let canceled = 0;
+
+    for (const job of jobs) {
+      const { entry, id, localDir } = job;
+      if (canceledTransfersRef.current.has(id)) {
+        canceled += 1;
+        setQueue((items) => items.map((item) => (item.id === id ? { ...item, status: "Canceled", note: "Canceled before start" } : item)));
+        continue;
+      }
+
+      setStatus(`Downloading ${entry.name} to ${localDir}`);
+      setQueue((items) => items.map((item) => (item.id === id ? { ...item, status: "Transferring", note: "Starting" } : item)));
+
+      try {
+        const maxAttempts = Math.max(1, Number(retryCount || 0) + 1);
+        let result = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          if (canceledTransfersRef.current.has(id)) {
+            throw new Error("Transfer canceled by user.");
+          }
+          setQueue((items) =>
+            items.map((item) => (item.id === id ? { ...item, note: maxAttempts > 1 ? `Attempt ${attempt}/${maxAttempts}` : "Transferring" } : item))
+          );
+          try {
+            result = await api.downloadFromRemote({
+              id,
+              remotePath: entry.path,
+              localDir,
+              localName: entry.name,
+              isDirectory: entry.isDirectory,
+              size: entry.size,
+              usePartFile: safePartUploads,
+              verifySize: verifyAfterTransfer
+            });
+            break;
+          } catch (error) {
+            const message = error?.message || String(error);
+            const wasCanceled = canceledTransfersRef.current.has(id) || message.toLowerCase().includes("canceled");
+            if (wasCanceled || attempt === maxAttempts) throw error;
+            pushEvent("warn", `Download attempt ${attempt} failed for ${entry.name}: ${message}. Reconnecting and retrying.`);
+            setQueue((items) =>
+              items.map((item) => (item.id === id ? { ...item, note: `Retrying after reconnect (${attempt + 1}/${maxAttempts})` } : item))
+            );
+          }
+        }
+
+        if (canceledTransfersRef.current.has(id)) {
+          canceled += 1;
+          setQueue((items) => items.map((item) => (item.id === id ? { ...item, status: "Canceled", note: "Canceled" } : item)));
+          continue;
+        }
+
+        completed += 1;
+        recordSpeedSample({
+          direction: "download",
+          name: entry.name,
+          bytes: result.bytes || entry.size,
+          bytesPerSecond: result.bytesPerSecond,
+          target: localDir
+        });
+        setQueue((items) =>
+          items.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  destination: result.localPath,
+                  size: result.bytes || item.size,
+                  progress: 100,
+                  status: result.verified ? "Verified" : "Completed",
+                  elapsedMs: result.elapsedMs,
+                  bytesPerSecond: result.bytesPerSecond,
+                  note: result.verified ? "Size verified" : result.usedPartFile ? ".part rename complete" : "Complete"
+                }
+              : item
+          )
+        );
+        setStatus(`Download complete: ${entry.name}`);
+      } catch (error) {
+        const message = error?.message || String(error);
+        const wasCanceled = canceledTransfersRef.current.has(id) || message.toLowerCase().includes("canceled");
+        if (wasCanceled) {
+          canceled += 1;
+          setQueue((items) => items.map((item) => (item.id === id ? { ...item, status: "Canceled", note: "Canceled; partial file may remain on PC" } : item)));
+          pushEvent("warn", `Download canceled for ${entry.name}. Partial file may remain on the PC.`);
+          continue;
+        }
+        failed += 1;
+        setQueue((items) => items.map((item) => (item.id === id ? { ...item, status: "Failed", error: message, note: "Queue continued" } : item)));
+        pushEvent("error", `Download failed for ${entry.name}: ${message}. Continuing with the next queued item.`);
+        if (message.includes("Not connected to the PS3 FTP server")) {
+          setConnection((current) => ({ ...current, connected: false }));
+        }
+      }
+    }
+
+    await refreshLocal(jobs[0]?.localDir || local.path);
+    const summary = formatTransferBatchSummary({
+      label: "Download queue",
+      total: jobs.length,
+      completed,
+      failed,
+      canceled
+    });
+    setStatus(summary);
+    pushEvent(failed > 0 || canceled > 0 ? "warn" : "success", summary);
   }
 
   async function cancelQueueItem(item) {
@@ -873,6 +1247,13 @@ function App() {
           result.elapsedMs / 1000
         ).toFixed(1)}s.`
       );
+      recordSpeedSample({
+        direction: "speed-test",
+        name: remote.path,
+        bytes: result.sizeBytes,
+        bytesPerSecond: result.bytesPerSecond,
+        target: result.remoteDir || remote.path
+      });
       await refreshRemote(remote.path);
     } catch (error) {
       setStatus(`Speed test failed: ${error.message}`);
@@ -901,6 +1282,7 @@ function App() {
       username: "anonymous",
       password: ""
     }));
+    setDirectLanOpen(false);
     setStatus("Direct Ethernet preset loaded. Set PC Ethernet to 192.168.50.1, then connect.");
     pushEvent("info", "Direct Ethernet preset loaded.");
   }
@@ -910,16 +1292,27 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      style={{
+        "--local-fr": `${layout.localShare}fr`,
+        "--remote-fr": `${100 - layout.localShare}fr`,
+        "--queue-height": `${layout.queueHeight}px`,
+        "--log-height": `${layout.logHeight}px`
+      }}
+    >
       <header className="titlebar">
         <div className="brand">
           <img src={jesterIcon} alt="" className="brand-icon" />
           <div>
             <h1>Jester's Game Vault</h1>
-            <p>For owned backups and homebrew</p>
+            <p>For owned backups and homebrew <span className="app-version">v{appInfo.version}</span></p>
           </div>
         </div>
         <div className="status-strip">
+          <button className="link-button" type="button" onClick={() => setAboutOpen(true)}>
+            About
+          </button>
           <span className={connection.connected ? "status-dot live" : "status-dot"} />
           <span>{connection.connected ? "Connected" : "Disconnected"}</span>
           <span>FTP</span>
@@ -930,12 +1323,12 @@ function App() {
         profiles={profiles}
         selectedProfileId={selectedProfileId}
         profileName={profileName}
-        refreshAfterUpload={settings.refreshAfterUpload}
+        settings={settings}
         onSelectProfile={applyProfile}
         onProfileNameChange={setProfileName}
         onSaveProfile={saveProfile}
         onDeleteProfile={deleteProfile}
-        onRefreshAfterUploadChange={(refreshAfterUpload) => setSettings((current) => ({ ...current, refreshAfterUpload }))}
+        onSettingsChange={(patch) => setSettings((current) => ({ ...current, ...patch }))}
       />
 
       <section className="connection-bar" aria-label="PS3 FTP connection">
@@ -996,8 +1389,10 @@ function App() {
 
         <TransferColumn
           selectedLocalEntry={selectedLocalEntry}
+          selectedRemoteEntry={selectedRemoteEntry}
           onTransfer={transferSelected}
           onChooseFiles={chooseAndUploadFiles}
+          onDownload={downloadSelectedRemote}
           connected={connection.connected || !window.vaultAPI}
         />
 
@@ -1069,7 +1464,7 @@ function App() {
           </div>
           <div className="rail-section">
             <h2>Network</h2>
-            <button className="button full" type="button" onClick={useDirectLanPreset}>
+            <button className="button full" type="button" onClick={() => setDirectLanOpen(true)}>
               <Router size={17} />
               Direct LAN
             </button>
@@ -1077,6 +1472,11 @@ function App() {
               <Cable size={17} />
               Speed Test
             </button>
+            <SpeedHistory samples={speedHistory} />
+          </div>
+          <div className="rail-section">
+            <h2>Layout</h2>
+            <LayoutControls layout={layout} onChange={setLayout} />
           </div>
         </aside>
       </section>
@@ -1130,6 +1530,19 @@ function App() {
           onConfirm={uploadPairedIsoKey}
         />
       ) : null}
+
+      {directLanOpen ? (
+        <DirectLanDialog
+          connection={connection}
+          onApplyPreset={useDirectLanPreset}
+          onClose={() => setDirectLanOpen(false)}
+          onSpeedTest={runSpeedTest}
+        />
+      ) : null}
+
+      {aboutOpen ? (
+        <AboutDialog appInfo={appInfo} onClose={() => setAboutOpen(false)} />
+      ) : null}
     </main>
   );
 }
@@ -1147,12 +1560,12 @@ function ProfileBar({
   profiles,
   selectedProfileId,
   profileName,
-  refreshAfterUpload,
+  settings,
   onSelectProfile,
   onProfileNameChange,
   onSaveProfile,
   onDeleteProfile,
-  onRefreshAfterUploadChange
+  onSettingsChange
 }) {
   return (
     <section className="profile-bar" aria-label="Saved PS3 profiles and transfer options">
@@ -1179,15 +1592,52 @@ function ProfileBar({
         <Trash2 size={16} />
         Delete Profile
       </button>
-      <label className="toggle-option">
-        <input
-          type="checkbox"
-          checked={refreshAfterUpload}
-          onChange={(event) => onRefreshAfterUploadChange(event.target.checked)}
+      <div className="option-cluster">
+        <ToggleOption
+          label="Auto reconnect/retry"
+          checked={settings.autoRetryTransfers}
+          onChange={(autoRetryTransfers) => onSettingsChange({ autoRetryTransfers })}
         />
-        <span>Refresh XML after successful uploads</span>
-      </label>
+        <ToggleOption
+          label="Verify size"
+          checked={settings.verifyAfterTransfer}
+          onChange={(verifyAfterTransfer) => onSettingsChange({ verifyAfterTransfer })}
+        />
+        <ToggleOption
+          label=".part safety"
+          checked={settings.safePartUploads}
+          onChange={(safePartUploads) => onSettingsChange({ safePartUploads })}
+        />
+        <ToggleOption
+          label="Preflight"
+          checked={settings.preflightChecks}
+          onChange={(preflightChecks) => onSettingsChange({ preflightChecks })}
+        />
+        <ToggleOption
+          label="Refresh XML"
+          checked={settings.refreshAfterUpload}
+          onChange={(refreshAfterUpload) => onSettingsChange({ refreshAfterUpload })}
+        />
+        <ToggleOption
+          label="Speed history"
+          checked={settings.trackSpeedHistory}
+          onChange={(trackSpeedHistory) => onSettingsChange({ trackSpeedHistory })}
+        />
+      </div>
     </section>
+  );
+}
+
+function ToggleOption({ label, checked, onChange }) {
+  return (
+    <label className="toggle-option">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span>{label}</span>
+    </label>
   );
 }
 
@@ -1224,6 +1674,71 @@ function VaultDoctor({ report, onRun }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function SpeedHistory({ samples }) {
+  const usableSamples = samples.filter((sample) => sample.bytesPerSecond > 0);
+  const latest = usableSamples[0];
+  const average = usableSamples.length
+    ? Math.round(usableSamples.reduce((sum, sample) => sum + sample.bytesPerSecond, 0) / usableSamples.length)
+    : 0;
+
+  return (
+    <div className="speed-history" aria-label="Transfer speed history">
+      <div>
+        <span>Latest</span>
+        <strong>{latest ? `${formatBytes(latest.bytesPerSecond)}/s` : "--"}</strong>
+      </div>
+      <div>
+        <span>Average</span>
+        <strong>{average ? `${formatBytes(average)}/s` : "--"}</strong>
+      </div>
+      <small>{latest ? `${latest.direction} ${latest.name}` : "No samples yet"}</small>
+    </div>
+  );
+}
+
+function LayoutControls({ layout, onChange }) {
+  const update = (key, value) => {
+    onChange((current) => ({ ...current, [key]: Number(value) }));
+  };
+
+  return (
+    <div className="layout-controls" aria-label="Adjust layout">
+      <label>
+        <span>Local width</span>
+        <input
+          type="range"
+          min="35"
+          max="65"
+          value={layout.localShare}
+          onChange={(event) => update("localShare", event.target.value)}
+        />
+      </label>
+      <label>
+        <span>Queue height</span>
+        <input
+          type="range"
+          min="220"
+          max="520"
+          step="10"
+          value={layout.queueHeight}
+          onChange={(event) => update("queueHeight", event.target.value)}
+        />
+      </label>
+      <label>
+        <span>Log height</span>
+        <input
+          type="range"
+          min="80"
+          max="220"
+          step="10"
+          value={layout.logHeight}
+          onChange={(event) => update("logHeight", event.target.value)}
+        />
+      </label>
+    </div>
   );
 }
 
@@ -1297,7 +1812,7 @@ function FilePane({
         {dropEnabled ? (
           <div className="drop-copy">
             <FileUp size={16} />
-            Drop files here to upload to {pathText}
+            Drop files or folders here to upload to {pathText}
           </div>
         ) : null}
         <div className="file-row file-head" role="row">
@@ -1340,19 +1855,20 @@ function FilePane({
   );
 }
 
-function TransferColumn({ selectedLocalEntry, onTransfer, onChooseFiles, connected }) {
-  const canTransfer = connected && selectedLocalEntry && !selectedLocalEntry.isDirectory;
+function TransferColumn({ selectedLocalEntry, selectedRemoteEntry, onTransfer, onChooseFiles, onDownload, connected }) {
+  const canTransfer = connected && selectedLocalEntry;
+  const canDownload = connected && selectedRemoteEntry;
   return (
     <section className="transfer-column">
       <button className="transfer-button choose" type="button" disabled={!connected} onClick={onChooseFiles}>
         <FileUp size={18} />
-        <span>Choose Files</span>
+        <span>Choose Items</span>
       </button>
       <button className="transfer-button" type="button" disabled={!canTransfer} onClick={onTransfer}>
         <Upload size={18} />
         <span>Transfer to PS3</span>
       </button>
-      <button className="transfer-button muted" type="button" disabled>
+      <button className="transfer-button download" type="button" disabled={!canDownload} onClick={onDownload}>
         <Download size={18} />
         <span>Transfer to PC</span>
       </button>
@@ -1449,11 +1965,15 @@ function insertQueuedRows(items, queuedRows) {
 }
 
 function formatUploadBatchSummary({ total, completed, failed, canceled }) {
+  return formatTransferBatchSummary({ label: "Transfer queue", total, completed, failed, canceled });
+}
+
+function formatTransferBatchSummary({ label, total, completed, failed, canceled }) {
   const parts = [`${completed}/${total} completed`];
   if (failed > 0) parts.push(`${failed} failed`);
   if (canceled > 0) parts.push(`${canceled} canceled`);
   const suffix = failed > 0 || canceled > 0 ? " Remaining queued items kept running." : "";
-  return `Transfer queue finished: ${parts.join(", ")}.${suffix}`;
+  return `${label} finished: ${parts.join(", ")}.${suffix}`;
 }
 
 function prepareUploadJobs(files) {
@@ -1462,8 +1982,9 @@ function prepareUploadJobs(files) {
   const isoByBase = new Map(isoEntries.map((entry) => [baseNameWithoutExtension(entry.name), entry]));
 
   return files.map((entry, index) => {
-    let remoteName = entry.name;
-    let note = "";
+    const remoteName = normalizeRelativePath(entry.relativePath || entry.name);
+    let note = entry.relativePath && entry.relativePath !== entry.name ? "Folder file" : "";
+    const operation = entry.relativePath && entry.relativePath !== entry.name ? "Transfer folder file" : isPs3IsoKeyFile(entry.name) ? "Transfer PS3 key" : "Transfer to PS3";
 
     if (isPs3IsoKeyFile(entry.name)) {
       const keyBase = baseNameWithoutExtension(entry.name);
@@ -1476,6 +1997,7 @@ function prepareUploadJobs(files) {
       entry,
       id: `${createdAt}-${index}-${entry.name}`,
       remoteName,
+      operation,
       note
     };
   });
@@ -1616,6 +2138,80 @@ function KeyPairDialog({ candidate, onChooseKey, onUploadIsoOnly, onCancel, onCo
   );
 }
 
+function DirectLanDialog({ connection, onApplyPreset, onClose, onSpeedTest }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-dialog lan-dialog" role="dialog" aria-modal="true" aria-labelledby="lan-title">
+        <div className="confirm-icon key-ok">
+          <Router size={22} />
+        </div>
+        <div className="confirm-copy">
+          <h2 id="lan-title">Direct LAN</h2>
+          <div className="lan-grid">
+            <span>PC Ethernet</span>
+            <code>192.168.50.1</code>
+            <span>PS3 Ethernet</span>
+            <code>192.168.50.2</code>
+            <span>App target</span>
+            <code>{connection.host || "Not set"}</code>
+          </div>
+          <div className="pair-result ok">
+            Wired FTP is most stable with one transfer at a time.
+          </div>
+        </div>
+        <div className="confirm-actions key-actions">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Close
+          </button>
+          <button className="button secondary" type="button" onClick={onSpeedTest}>
+            <Cable size={16} />
+            Speed Test
+          </button>
+          <button className="button primary" type="button" onClick={onApplyPreset}>
+            <Router size={16} />
+            Apply Preset
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AboutDialog({ appInfo, onClose }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <div className="confirm-icon key-ok">
+          <Gamepad2 size={22} />
+        </div>
+        <div className="confirm-copy">
+          <h2 id="about-title">Jester's Game Vault</h2>
+          <p>Free PS3 FTP vault for owned backups, homebrew, and console maintenance.</p>
+          <div className="lan-grid">
+            <span>Version</span>
+            <code>{appInfo.version}</code>
+            <span>Electron</span>
+            <code>{appInfo.electron || "Preview"}</code>
+            <span>Chrome</span>
+            <code>{appInfo.chrome || "Preview"}</code>
+            <span>Runtime</span>
+            <code>{appInfo.packaged ? "Packaged app" : "Development / preview"}</code>
+          </div>
+          <div className="pair-result ok">
+            File &gt; About opens this version panel in the desktop build.
+          </div>
+        </div>
+        <div className="confirm-actions">
+          <button className="button primary" type="button" onClick={onClose}>
+            <Check size={16} />
+            Close
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function applyFilter(entries, filter) {
   const term = filter.trim().toLowerCase();
   if (!term) return entries;
@@ -1679,6 +2275,16 @@ function normalizeRemotePathText(remotePath) {
   if (!remotePath) return "/";
   const normalized = remotePath.replace(/\\/g, "/").replace(/\/+/g, "/");
   return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function normalizeRelativePath(value) {
+  const normalized = String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+  return normalized || fileNameFromPath(value);
 }
 
 function remoteParentPath(remotePath) {
@@ -1841,6 +2447,59 @@ function readStoredSettings() {
 function writeStoredSettings(settings) {
   if (typeof window.localStorage === "undefined") return;
   window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function readStoredLayout() {
+  if (typeof window.localStorage === "undefined") return DEFAULT_LAYOUT;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LAYOUT_STORAGE_KEY) || "{}");
+    return {
+      localShare: clampNumber(parsed.localShare, 35, 65, DEFAULT_LAYOUT.localShare),
+      queueHeight: clampNumber(parsed.queueHeight, 220, 520, DEFAULT_LAYOUT.queueHeight),
+      logHeight: clampNumber(parsed.logHeight, 80, 220, DEFAULT_LAYOUT.logHeight)
+    };
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
+
+function writeStoredLayout(layout) {
+  if (typeof window.localStorage === "undefined") return;
+  window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+}
+
+function readStoredSpeedHistory() {
+  if (typeof window.localStorage === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SPEED_HISTORY_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item?.id && Number(item?.bytesPerSecond) > 0)
+      .map((item) => ({
+        id: String(item.id),
+        createdAt: String(item.createdAt || new Date().toISOString()),
+        host: String(item.host || ""),
+        direction: String(item.direction || "transfer"),
+        name: String(item.name || ""),
+        target: String(item.target || ""),
+        bytes: Number(item.bytes || 0),
+        bytesPerSecond: Number(item.bytesPerSecond || 0)
+      }))
+      .slice(0, MAX_SPEED_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredSpeedHistory(samples) {
+  if (typeof window.localStorage === "undefined") return;
+  window.localStorage.setItem(SPEED_HISTORY_STORAGE_KEY, JSON.stringify(samples.slice(0, MAX_SPEED_HISTORY)));
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(number, min), max);
 }
 
 function fileNameFromPath(value) {

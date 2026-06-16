@@ -114,6 +114,11 @@ button {
   font-size: 13px;
 }
 
+.app-version {
+  color: var(--teal);
+  font-weight: 700;
+}
+
 .status-strip {
   display: flex;
   align-items: center;
@@ -121,6 +126,20 @@ button {
   color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: var(--teal);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+}
+
+.link-button:hover {
+  color: #a8fff7;
 }
 
 .status-dot {
@@ -149,7 +168,7 @@ button {
   min-height: 64px;
   border-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(210px, 0.9fr) minmax(180px, 0.8fr) auto auto minmax(260px, 1fr);
+  grid-template-columns: minmax(190px, 0.8fr) minmax(160px, 0.7fr) auto auto minmax(520px, 1.4fr);
   gap: 10px;
   align-items: end;
   padding: 12px;
@@ -206,7 +225,7 @@ button {
 
 .toggle-option {
   min-width: 0;
-  min-height: 38px;
+  min-height: 24px;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -226,6 +245,14 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.option-cluster {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 10px;
+  align-items: center;
 }
 
 .button,
@@ -314,7 +341,7 @@ button {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(360px, 1.08fr) 160px minmax(360px, 1fr) 230px;
+  grid-template-columns: minmax(300px, var(--local-fr, 52fr)) 160px minmax(300px, var(--remote-fr, 48fr)) 230px;
   gap: 10px;
 }
 
@@ -698,9 +725,16 @@ button {
   font-weight: 760;
 }
 
-.transfer-button.muted {
+.transfer-button.muted,
+.transfer-button.download {
   color: var(--dim);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.transfer-button.download:not(:disabled) {
+  color: #dffaf6;
+  border-color: rgba(117, 185, 255, 0.36);
+  background: rgba(117, 185, 255, 0.08);
 }
 
 .transfer-button.choose {
@@ -762,6 +796,59 @@ button {
   padding-top: 14px;
 }
 
+.speed-history {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.speed-history div {
+  display: grid;
+  gap: 3px;
+}
+
+.speed-history span,
+.speed-history small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.speed-history strong {
+  font-size: 13px;
+}
+
+.speed-history small {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-controls {
+  display: grid;
+  gap: 9px;
+}
+
+.layout-controls label {
+  display: grid;
+  gap: 5px;
+}
+
+.layout-controls span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.layout-controls input {
+  width: 100%;
+  accent-color: var(--teal);
+}
+
 .path-buttons {
   display: grid;
   gap: 8px;
@@ -813,10 +900,12 @@ button {
 
 .queue-panel {
   border-radius: 8px;
-  min-height: 300px;
+  height: var(--queue-height, 320px);
+  min-height: 220px;
+  max-height: 54vh;
   overflow: hidden;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) 126px;
+  grid-template-rows: auto minmax(0, 1fr) var(--log-height, 126px);
 }
 
 .queue-header {
@@ -1183,6 +1272,12 @@ button {
   border-color: rgba(82, 223, 209, 0.32);
 }
 
+.confirm-dialog.about-dialog,
+.confirm-dialog.lan-dialog {
+  width: min(620px, 100%);
+  border-color: rgba(82, 223, 209, 0.32);
+}
+
 .confirm-icon {
   width: 48px;
   height: 48px;
@@ -1248,6 +1343,24 @@ button {
   align-items: center;
 }
 
+.lan-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.lan-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lan-grid code {
+  margin-top: 0;
+  color: #dffaf6;
+}
+
 .pair-check span {
   color: var(--muted);
   font-size: 12px;
@@ -1300,6 +1413,11 @@ button {
 @media (max-width: 1180px) {
   .profile-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .option-cluster {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .connection-bar {
@@ -1358,6 +1476,10 @@ button {
   .vault-rail,
   .transfer-column {
     grid-template-columns: 1fr;
+  }
+
+  .option-cluster {
+    grid-template-columns: 1fr 1fr;
   }
 
   .connection-note {

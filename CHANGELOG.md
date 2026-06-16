@@ -2,6 +2,34 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.8 - 2026-06-16
+
+- Added folder upload by expanding selected folders into resilient queue rows.
+- Added PS3-to-PC download for selected remote files and folders.
+- Added safe `.part` transfers so unfinished uploads/downloads do not masquerade as complete files.
+- Added size verification after transfer and visible `Verified` queue status.
+- Added preflight checks for destination folders, existing files, and leftover `.part` files.
+- Added auto reconnect/retry for failed file attempts before a row is marked `Failed`.
+- Added speed history for uploads, downloads, and FTP speed tests.
+- Added a Direct LAN wizard with preset and speed-test controls.
+- Updated the transfer controls to support non-ISO files and folders, not only ISO backups.
+- Added File > About plus visible header version text.
+- Unblocked PS3 folder browsing during active transfers by using dedicated FTP clients for long uploads/downloads.
+- Added adjustable layout sliders for local/remote pane width, queue height, and live-log height.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `npm run pack:linux`
+- `npm run release:beta`
+- Browser mock upload verification check
+- Browser mock PS3-to-PC download check
+- Browser mock folder upload expansion check
+- Browser Direct LAN modal check
+- Browser About/version panel check with no new console warnings
+- Packaged Windows EXE mount, version, About, and layout slider checks
+
 ## 0.1.7 - 2026-06-15
 
 - Added a resilient upload queue runner so newly selected games wait behind the active batch instead of racing it.

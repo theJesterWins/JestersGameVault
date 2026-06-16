@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.7-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-0.1.8-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
@@ -80,6 +80,12 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Connect to the PS3 by IP address using the webMAN MOD FTP defaults
 - Save multiple PS3 connection profiles for quick switching
 - Upload selected local files, picked files, or dropped files to the active PS3 folder
+- Upload selected local folders recursively while preserving folder structure
+- Download selected PS3 files or folders back to the active local folder
+- Use safe `.part` transfers, size verification, preflight checks, and reconnect/retry for steadier FTP sessions
+- Browse PS3 folders while long uploads or downloads continue in the transfer queue
+- See the current version in the title area or File > About
+- Adjust local/remote pane width, queue height, and live-log height for different PC screens
 - Select a PS3 ISO, then choose its `.key` / `.dkey` in a pairing popup before upload
 - Auto-detect a same-folder PS3 ISO key and prefill the pairing popup
 - Check that the key filename spelling exactly matches the ISO filename before paired upload
@@ -88,12 +94,13 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Optional webMAN MOD XML refresh after successful uploads
 - Cancel queued transfers or abort the active FTP upload; partial files remain visible for review
 - Queue multiple batches safely; one failed game marks only that row and the rest keep running
+- Track recent transfer and speed-test throughput
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation
 - Transfer queue with upload and delete status from Electron
 - webMAN MOD `refresh.ps3` and `restart.ps3` utility buttons
-- Direct LAN preset and FTP speed test for later Ethernet experiments
+- Direct LAN wizard and FTP speed test for Ethernet experiments
 - Browser-preview fallback when Electron APIs are unavailable
 
 ## Notes
 
-Delete is intentionally limited to `/dev_hdd0/...` paths and requires confirmation. The first version still avoids broader destructive actions such as local deletes, remote rename, and overwrite management.
+Delete is intentionally limited to `/dev_hdd0/...` paths and requires confirmation. The app avoids local deletes and keeps transfer recovery visible with `.part` files when a connection drops mid-transfer.
