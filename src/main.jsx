@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.14",
+  version: "0.1.15",
   electron: "",
   chrome: "",
   node: "",
@@ -117,10 +117,11 @@ function createMockApi() {
   const mockSearchParams = new window.URLSearchParams(window.location.search);
   const mockFailureMode = mockSearchParams.has("mockFailure");
   const mockSlowRemote = mockSearchParams.has("mockSlowRemote");
+  const failedMockUploadNames = new Set();
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.14-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.15-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -214,7 +215,8 @@ function createMockApi() {
     async uploadToRemote(payload) {
       await wait(mockFailureMode ? 350 : 900);
       const remoteName = payload.remoteName || payload.remoteRelativePath || payload.localPath.split("\\").pop();
-      if (mockFailureMode && remoteName === "queue_fail_middle.iso") {
+      if (mockFailureMode && remoteName === "queue_fail_middle.iso" && !failedMockUploadNames.has(remoteName)) {
+        failedMockUploadNames.add(remoteName);
         throw new Error("Mock transfer failed for queue isolation QA.");
       }
       return {
@@ -614,6 +616,8 @@ function App() {
     () => queue.some((item) => item.status === "Failed") || events.some((event) => event.level === "error" || event.level === "warn"),
     [events, queue]
   );
+  const failedQueueItems = useMemo(() => queue.filter((item) => item.status === "Failed"), [queue]);
+  const hasFailedQueueItems = failedQueueItems.length > 0;
   const doctorReport = useMemo(
     () =>
       buildVaultDoctorReport({
@@ -1655,6 +1659,144 @@ function App() {
     setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled", "Skipped"].includes(item.status)));
   }
 
+  async function retryFailed() {
+    const retryableItems = failedQueueItems.filter(isRetryableTransferRow);
+    const skippedItems = failedQueueItems.length - retryableItems.length;
+
+    if (retryableItems.length === 0) {
+      setStatus("No failed transfer rows are ready to retry.");
+      if (skippedItems > 0) {
+        pushEvent("warn", "Retry skipped because the failed queue rows are not transfer rows.");
+      }
+      return;
+    }
+
+    if (!connection.connected && window.vaultAPI) {
+      setStatus("Connect to your PS3 before retrying failed transfers.");
+      pushEvent("warn", "Retry blocked because the PS3 FTP session is not connected.");
+      return;
+    }
+
+    const createdAt = Date.now();
+    const retryIds = new Set(retryableItems.map((item) => item.id));
+    const retryRows = [];
+    const uploadGroups = new Map();
+    const downloadJobs = [];
+
+    retryableItems.forEach((item, index) => {
+      if (isRemoteVaultPath(item.destination)) {
+        const targetRemotePath = remoteParentPath(item.destination) || remote.path;
+        const remoteName = remoteFileNameFromPath(item.destination);
+        const localName = fileNameFromPath(item.source) || remoteName;
+        const id = `${createdAt}-retry-upload-${index}-${localName}`;
+        const entry = {
+          name: localName,
+          path: item.source,
+          isDirectory: false,
+          size: item.size || 0,
+          modifiedAt: new Date().toISOString(),
+          type: fileTypeFromName(localName),
+          relativePath: remoteName
+        };
+        const job = {
+          entry,
+          id,
+          remoteName,
+          operation: item.operation || (isPs3IsoKeyFile(remoteName) ? "Transfer PS3 key" : "Transfer to PS3"),
+          note: "Retrying failed row"
+        };
+
+        if (!uploadGroups.has(targetRemotePath)) {
+          uploadGroups.set(targetRemotePath, []);
+        }
+        uploadGroups.get(targetRemotePath).push(job);
+        retryRows.push({
+          id,
+          operation: job.operation,
+          source: entry.path,
+          destination: `${targetRemotePath}${remoteName}`,
+          size: entry.size,
+          progress: 0,
+          status: "Queued",
+          note: job.note,
+          elapsedMs: 0
+        });
+        return;
+      }
+
+      const remoteName = remoteFileNameFromPath(item.source);
+      const localDir = localParentPath(item.destination);
+      const isDirectory = item.operation === "Download folder";
+      const id = `${createdAt}-retry-download-${index}-${remoteName}`;
+      const job = {
+        id,
+        entry: {
+          name: remoteName,
+          path: item.source,
+          isDirectory,
+          size: item.size || 0,
+          modifiedAt: new Date().toISOString(),
+          type: isDirectory ? "Folder" : fileTypeFromName(remoteName)
+        },
+        localDir,
+        localPath: item.destination
+      };
+      downloadJobs.push(job);
+      retryRows.push({
+        id,
+        operation: isDirectory ? "Download folder" : "Download to PC",
+        source: item.source,
+        destination: item.destination,
+        size: item.size,
+        progress: 0,
+        status: "Queued",
+        note: "Retrying failed row",
+        elapsedMs: 0
+      });
+    });
+
+    setQueue((items) => insertQueuedRows(items.filter((item) => !retryIds.has(item.id)), retryRows));
+    setStatus(`Retrying ${retryableItems.length} failed transfer row(s).`);
+    pushEvent(
+      skippedItems > 0 ? "warn" : "info",
+      `Retrying ${retryableItems.length} failed transfer row(s).${skippedItems > 0 ? ` ${skippedItems} non-transfer row(s) skipped.` : ""}`
+    );
+
+    const batchPromise = uploadRunnerRef.current
+      .catch(() => {})
+      .then(async () => {
+        for (const [targetRemotePath, queuedFiles] of uploadGroups) {
+          await runUploadBatch({
+            queuedFiles,
+            targetRemotePath,
+            shouldVerifyIsoKeys: isPs3IsoTarget(targetRemotePath) && queuedFiles.some((job) => isPs3IsoFile(job.remoteName) || isPs3IsoKeyFile(job.remoteName)),
+            refreshAfterUpload: settings.refreshAfterUpload,
+            preflightChecks: settings.preflightChecks,
+            safePartUploads: settings.safePartUploads,
+            verifyAfterTransfer: settings.verifyAfterTransfer,
+            retryCount: settings.autoRetryTransfers ? settings.retryCount : 0
+          });
+        }
+
+        if (downloadJobs.length > 0) {
+          await runDownloadBatch({
+            jobs: downloadJobs,
+            safePartUploads: settings.safePartUploads,
+            verifyAfterTransfer: settings.verifyAfterTransfer,
+            retryCount: settings.autoRetryTransfers ? settings.retryCount : 0
+          });
+        }
+      });
+
+    uploadRunnerRef.current = batchPromise.catch((error) => {
+      const message = error?.message || String(error);
+      setStatus(`Retry worker failed: ${message}`);
+      pushEvent("error", `Retry worker failed: ${message}`);
+    });
+
+    return uploadRunnerRef.current;
+  }
+
   function clearErrors() {
     const removedQueueRows = queue.filter((item) => item.status === "Failed").length;
     const removedLogEvents = events.filter((event) => event.level === "error" || event.level === "warn").length;
@@ -1992,6 +2134,10 @@ function App() {
             <button className="button secondary" type="button" onClick={clearCompleted}>
               <Check size={16} />
               Clear Completed
+            </button>
+            <button className="button secondary" type="button" onClick={retryFailed} disabled={!hasFailedQueueItems}>
+              <RefreshCw size={16} />
+              Retry Failed
             </button>
             <button className="button secondary warning" type="button" onClick={clearErrors} disabled={!hasErrorHistory}>
               <AlertTriangle size={16} />
@@ -3326,6 +3472,31 @@ function remoteParentPath(remotePath) {
   const slashIndex = trimmed.lastIndexOf("/");
   if (slashIndex <= 0) return "/";
   return `${trimmed.slice(0, slashIndex)}/`;
+}
+
+function isRemoteVaultPath(value) {
+  return String(value || "").replace(/\\/g, "/").startsWith("/dev_hdd0/");
+}
+
+function isRetryableTransferRow(item) {
+  if (!item || item.status !== "Failed") return false;
+  const sourceIsRemote = isRemoteVaultPath(item.source);
+  const destinationIsRemote = isRemoteVaultPath(item.destination);
+  const operation = (item.operation || "").toLowerCase();
+  const movesBetweenPcAndPs3 = sourceIsRemote !== destinationIsRemote;
+  return movesBetweenPcAndPs3 && (operation.includes("transfer") || (sourceIsRemote && operation.includes("download")));
+}
+
+function remoteFileNameFromPath(remotePath) {
+  const normalized = String(remotePath || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || fileNameFromPath(remotePath);
+}
+
+function localParentPath(localPath) {
+  const text = String(localPath || "");
+  const slashIndex = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
+  return slashIndex > 0 ? text.slice(0, slashIndex) : "";
 }
 
 function isLikelyIsoKeySize(size) {

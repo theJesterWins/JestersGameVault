@@ -2,6 +2,23 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.15 - 2026-06-16
+
+- Added **Retry Failed** beside the queue controls to requeue failed upload/download transfer rows without reselecting files.
+- Retry now preserves the original source, destination, size, transfer settings, reconnect/retry count, `.part` safety, and verification behavior.
+- Failed destructive delete rows are intentionally left manual instead of being retried by the bulk transfer retry button.
+- Updated browser-preview failure QA so the mock failed transfer can recover on retry.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- Browser QA: mock failed queue row, Retry Failed recovery, retry button disabled after recovery, and console health.
+- `npm run release:beta`
+- Packaged Windows EXE smoke test.
+
 ## 0.1.14 - 2026-06-16
 
 - Added **Clear Errors** beside the queue controls to remove failed queue rows plus warning/error log entries.
