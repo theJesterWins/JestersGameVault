@@ -2,6 +2,19 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.10 - 2026-06-16
+
+- Fixed a transient Vault Doctor warning flash when switching quickly between PS2ISO/PS3ISO path buttons.
+- Made Vault Doctor ignore stale remote rows from the previously viewed folder until the newly selected PS3 folder finishes loading.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `npm run release:beta`
+- Browser QA: PS2ISO -> PS3ISO path switching without a transient red Doctor banner.
+- Packaged Windows EXE smoke test.
+
 ## 0.1.9 - 2026-06-16
 
 - Reworked Vault Doctor into a compact warning banner that only appears for actionable warning/error items.

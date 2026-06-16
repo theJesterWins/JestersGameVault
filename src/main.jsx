@@ -54,7 +54,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.9",
+  version: "0.1.10",
   electron: "",
   chrome: "",
   node: "",
@@ -111,11 +111,13 @@ function file(name, type, size, modifiedAt) {
 
 function createMockApi() {
   let remotePath = "/dev_hdd0/PS3ISO/";
-  const mockFailureMode = new window.URLSearchParams(window.location.search).has("mockFailure");
+  const mockSearchParams = new window.URLSearchParams(window.location.search);
+  const mockFailureMode = mockSearchParams.has("mockFailure");
+  const mockSlowRemote = mockSearchParams.has("mockSlowRemote");
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.9-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.10-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -191,6 +193,7 @@ function createMockApi() {
     },
     async listRemote(targetPath) {
       remotePath = targetPath || remotePath;
+      if (mockSlowRemote) await wait(180);
       return {
         path: remotePath,
         parent: "/dev_hdd0/",
@@ -284,6 +287,7 @@ function App() {
   const canceledTransfersRef = useRef(new Set());
   const uploadRunnerRef = useRef(Promise.resolve());
   const mockRemoteInitializedRef = useRef(false);
+  const remoteRequestSeqRef = useRef(0);
   const workspaceRef = useRef(null);
   const [connection, setConnection] = useState({
     host: "",
@@ -294,7 +298,7 @@ function App() {
   });
   const [status, setStatus] = useState("Ready for PS3 FTP.");
   const [local, setLocal] = useState({ path: "", parent: null, entries: [] });
-  const [remote, setRemote] = useState({ path: "/dev_hdd0/PS3ISO/", parent: null, entries: [] });
+  const [remote, setRemote] = useState({ path: "/dev_hdd0/PS3ISO/", loadedPath: "/dev_hdd0/PS3ISO/", parent: null, entries: [] });
   const [selectedLocal, setSelectedLocal] = useState(null);
   const [selectedRemote, setSelectedRemote] = useState(null);
   const [queue, setQueue] = useState([]);
@@ -350,11 +354,15 @@ function App() {
 
   const refreshRemote = useCallback(async (targetPath = remote.path, force = false) => {
     if (!force && !connection.connected && window.vaultAPI) return;
+    const requestId = remoteRequestSeqRef.current + 1;
+    remoteRequestSeqRef.current = requestId;
     try {
       const result = await api.listRemote(targetPath);
-      setRemote(result);
+      if (requestId !== remoteRequestSeqRef.current) return;
+      setRemote({ ...result, loadedPath: result.path });
       setSelectedRemote(null);
     } catch (error) {
+      if (requestId !== remoteRequestSeqRef.current) return;
       setStatus(`PS3 browse failed: ${error.message}`);
       pushEvent("error", `PS3 browse failed: ${error.message}`);
       if (error.message.includes("Not connected")) {
@@ -473,9 +481,10 @@ function App() {
         localEntries: local.entries,
         remoteEntries: remote.entries,
         remotePath: remote.path,
+        remoteReady: Boolean(remote.loadedPath) && remotePathsMatch(remote.path, remote.loadedPath),
         queue
       }),
-    [local.entries, queue, remote.entries, remote.path]
+    [local.entries, queue, remote.entries, remote.loadedPath, remote.path]
   );
 
   async function connect() {
@@ -1277,6 +1286,7 @@ function App() {
     setRemote((current) => ({
       ...current,
       path: normalizedPath,
+      loadedPath: remotePathsMatch(current.loadedPath || "", normalizedPath) ? current.loadedPath : null,
       parent: remoteParentPath(normalizedPath)
     }));
     await refreshRemote(normalizedPath);
@@ -2420,14 +2430,15 @@ function isLikelyIsoKeySize(size) {
   return Number(size) > 0 && Number(size) <= 64;
 }
 
-function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, queue }) {
+function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, remoteReady = true, queue }) {
   const issues = [];
   const readyItems = new Set();
   const localFiles = localEntries.filter((entry) => !entry.isDirectory);
-  const remoteFiles = remoteEntries.filter((entry) => !entry.isDirectory);
+  const currentRemoteEntries = remoteReady && remoteEntriesBelongToPath(remoteEntries, remotePath) ? remoteEntries : [];
+  const remoteFiles = currentRemoteEntries.filter((entry) => !entry.isDirectory);
   const remoteByName = new Map(remoteFiles.map((entry) => [entry.name, entry]));
   const localByName = new Map(localFiles.map((entry) => [entry.name, entry]));
-  const ps3Target = isPs3IsoTarget(remotePath);
+  const ps3Target = remoteReady && isPs3IsoTarget(remotePath);
 
   const addIssue = (severity, title, detail) => {
     issues.push({
@@ -2512,6 +2523,19 @@ function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, queue
     ready: readyItems.size,
     summary
   };
+}
+
+function remotePathsMatch(leftPath, rightPath) {
+  return normalizeRemotePathText(leftPath).toLowerCase() === normalizeRemotePathText(rightPath).toLowerCase();
+}
+
+function remoteEntriesBelongToPath(remoteEntries, remotePath) {
+  if (!remoteEntries.length) return true;
+  const normalizedRemotePath = normalizeRemotePathText(remotePath).toLowerCase();
+  return remoteEntries.every((entry) => {
+    if (!entry.path) return true;
+    return normalizeRemotePathText(entry.path).toLowerCase().startsWith(normalizedRemotePath);
+  });
 }
 
 function severityRank(severity) {

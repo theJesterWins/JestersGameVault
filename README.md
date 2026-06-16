@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.9-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-0.1.10-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
