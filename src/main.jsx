@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.13",
+  version: "0.1.14",
   electron: "",
   chrome: "",
   node: "",
@@ -120,7 +120,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.13-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.14-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -610,6 +610,10 @@ function App() {
       null
     );
   }, [queue]);
+  const hasErrorHistory = useMemo(
+    () => queue.some((item) => item.status === "Failed") || events.some((event) => event.level === "error" || event.level === "warn"),
+    [events, queue]
+  );
   const doctorReport = useMemo(
     () =>
       buildVaultDoctorReport({
@@ -1651,6 +1655,37 @@ function App() {
     setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled", "Skipped"].includes(item.status)));
   }
 
+  function clearErrors() {
+    const removedQueueRows = queue.filter((item) => item.status === "Failed").length;
+    const removedLogEvents = events.filter((event) => event.level === "error" || event.level === "warn").length;
+
+    setQueue((items) => items.filter((item) => item.status !== "Failed"));
+    setEvents((items) => {
+      return [
+        {
+          id: `${Date.now()}-clear-errors`,
+          level: "info",
+          message: `Cleared ${removedQueueRows} failed queue row(s) and ${removedLogEvents} warning/error log event(s).`,
+          createdAt: new Date().toISOString()
+        },
+        ...items.filter((event) => event.level !== "error" && event.level !== "warn")
+      ].slice(0, 80);
+    });
+    setStatus("Cleared failed queue rows and warning/error log entries.");
+  }
+
+  function clearLog() {
+    setEvents([
+      {
+        id: `${Date.now()}-clear-log`,
+        level: "info",
+        message: "Live log cleared.",
+        createdAt: new Date().toISOString()
+      }
+    ]);
+    setStatus("Live log cleared.");
+  }
+
   function setLayoutValue(key, value) {
     const limit = LAYOUT_LIMITS[key];
     const rounded = Math.round(Number(value) / limit.step) * limit.step;
@@ -1958,6 +1993,10 @@ function App() {
               <Check size={16} />
               Clear Completed
             </button>
+            <button className="button secondary warning" type="button" onClick={clearErrors} disabled={!hasErrorHistory}>
+              <AlertTriangle size={16} />
+              Clear Errors
+            </button>
           </div>
         </div>
         <QueueTable items={queue} onCancel={cancelQueueItem} />
@@ -1969,7 +2008,7 @@ function App() {
           onPointerDown={(event) => startResize("log", event)}
           onNudge={(direction) => nudgeLayout("log", direction)}
         />
-        <LiveLog events={events} />
+        <LiveLog events={events} onClear={clearLog} />
       </section>
 
       <StatusBar
@@ -2553,12 +2592,18 @@ function QueueTable({ items, onCancel }) {
   );
 }
 
-function LiveLog({ events }) {
+function LiveLog({ events, onClear }) {
   return (
     <section className="live-log" aria-label="Live operation log">
       <div className="live-log-header">
         <h2>Live Log</h2>
-        <span>{events.length} events</span>
+        <div className="live-log-actions">
+          <span>{events.length} events</span>
+          <button className="button secondary compact" type="button" onClick={onClear} disabled={events.length === 0}>
+            <X size={14} />
+            Clear Log
+          </button>
+        </div>
       </div>
       <div className="live-log-list">
         {events.map((event) => (

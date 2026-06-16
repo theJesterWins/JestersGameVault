@@ -48,7 +48,7 @@ For Windows trust and publisher identity, see [docs/windows-signing.md](docs/win
 Download the `.flatpak` bundle from the latest GitHub release, then run:
 
 ```bash
-flatpak install --user ./JestersGameVault-Beta-0.1.13-linux-x86_64.flatpak
+flatpak install --user ./JestersGameVault-Beta-0.1.14-linux-x86_64.flatpak
 flatpak run io.github.thejesterwins.JestersGameVault
 ```
 
@@ -93,6 +93,7 @@ For a steadier connection, use Ethernet instead of Wi-Fi. See [docs/direct-ether
 - Vault Doctor checks for missing keys, orphan keys, duplicates, size mismatches, and wrong target folders
 - Optional webMAN MOD XML refresh after successful uploads
 - Cancel queued transfers or abort the active FTP upload; partial files remain visible for review
+- Clear failed queue rows and warning/error log entries without stopping active transfers
 - Queue multiple batches safely; one failed game marks only that row and the rest keep running
 - Track recent transfer and speed-test throughput
 - Delete selected files or folders from `/dev_hdd0/...` after confirmation

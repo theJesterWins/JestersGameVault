@@ -2,6 +2,22 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.14 - 2026-06-16
+
+- Added **Clear Errors** beside the queue controls to remove failed queue rows plus warning/error log entries.
+- Added **Clear Log** in the Live Log header for a full log reset.
+- Kept active queued/transferring rows untouched when clearing errors.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- Browser QA: mock failed queue row, Clear Errors, idle summary warning clear, Clear Log, and console health.
+- `npm run release:beta`
+- Packaged Windows EXE smoke test.
+
 ## 0.1.13 - 2026-06-16
 
 - Added an **Ethernet Connect** button beside the PS3 IP field for the direct-cable flow.
