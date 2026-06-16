@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.12",
+  version: "0.1.13",
   electron: "",
   chrome: "",
   node: "",
@@ -120,7 +120,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.12-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.13-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -576,7 +576,16 @@ function App() {
       try {
         const result = await api.ftpStatus();
         setConnection((current) => {
-          if (!current.connected || result.connected) return current;
+          if (result.connected) {
+            return {
+              ...current,
+              connected: true,
+              host: result.host || current.host,
+              port: String(result.port || current.port || "21"),
+              username: result.user || current.username || "anonymous"
+            };
+          }
+          if (!current.connected) return current;
           return { ...current, connected: false };
         });
       } catch {
@@ -624,17 +633,28 @@ function App() {
     [local.entries, local.path, remote.entries, remote.loadedPath, remote.path]
   );
 
-  async function connect() {
+  async function connect(configOverride = null, options = {}) {
+    const targetConfig = configOverride && !configOverride.nativeEvent
+      ? { ...connection, ...configOverride }
+      : connection;
     setBusy(true);
     try {
-      const result = await api.connectFtp(connection);
-      setConnection((current) => ({ ...current, connected: result.connected }));
+      const result = await api.connectFtp(targetConfig);
+      setConnection((current) => ({
+        ...current,
+        ...targetConfig,
+        host: result.host || targetConfig.host,
+        port: String(result.port || targetConfig.port || "21"),
+        username: result.user || targetConfig.username || "anonymous",
+        connected: result.connected
+      }));
       setStatus(`Connected to ${result.host}:${result.port} as ${result.user}.`);
       await refreshRemote(remote.path, true);
     } catch (error) {
       setConnection((current) => ({ ...current, connected: false }));
       setStatus(`Connection failed: ${error.message}`);
       pushEvent("error", `Connection failed: ${error.message}`);
+      if (options.throwOnError) throw error;
     } finally {
       setBusy(false);
     }
@@ -1520,6 +1540,66 @@ function App() {
     }
   }
 
+  async function connectViaEthernet() {
+    const ps3Ip = (directLanDraft.ps3Ip || connection.host || "192.168.1.3").trim();
+    const payload = getDirectLanPayload({
+      ...directLanDraft,
+      ps3Ip,
+      pcIp: directLanDraft.pcIp || "192.168.1.250"
+    });
+    const connectionConfig = {
+      host: payload.ps3Ip,
+      port: "21",
+      username: "anonymous",
+      password: ""
+    };
+
+    setDirectLanDraft((current) => ({
+      ...current,
+      ps3Ip: payload.ps3Ip,
+      pcIp: payload.pcIp || current.pcIp || "192.168.1.250"
+    }));
+    setConnection((current) => ({
+      ...current,
+      ...connectionConfig
+    }));
+    setDirectLanBusy("ethernet-connect");
+    setStatus(`Preparing Ethernet connection to ${payload.ps3Ip}.`);
+
+    try {
+      let report = await api.diagnoseDirectLan(payload);
+      mergeDirectLanReport(report);
+
+      if (!report?.ftp?.ok) {
+        const result = await api.applyDirectLan(payload);
+        if (result.report) {
+          report = result.report;
+          mergeDirectLanReport(result.report);
+        }
+        setDirectLanMapping(result);
+      }
+
+      if (!report?.ftp?.ok) {
+        const message = `Ethernet is mapped for ${payload.ps3Ip}, but FTP did not answer yet. Check webMAN FTP, then try Connect Now.`;
+        setDirectLanOpen(true);
+        setStatus(message);
+        pushEvent("warn", message);
+        return;
+      }
+
+      await connect(connectionConfig, { throwOnError: true });
+      setDirectLanOpen(false);
+      setStatus(`Ethernet FTP connected to ${payload.ps3Ip}.`);
+      pushEvent("success", `Ethernet FTP connected to ${payload.ps3Ip}.`);
+    } catch (error) {
+      setDirectLanOpen(true);
+      setStatus(`Ethernet connect needs attention: ${error.message}`);
+      pushEvent("error", `Ethernet connect needs attention: ${error.message}`);
+    } finally {
+      setDirectLanBusy("");
+    }
+  }
+
   async function runDirectLanRestore() {
     const payload = {
       ...getDirectLanPayload(),
@@ -1684,6 +1764,10 @@ function App() {
           onChange={(host) => setConnection((current) => ({ ...current, host }))}
           placeholder="e.g. 192.168.1.149"
         />
+        <button className="button secondary ethernet-button" type="button" onClick={connectViaEthernet} disabled={busy || Boolean(directLanBusy)}>
+          <Cable size={17} />
+          {directLanBusy === "ethernet-connect" ? "Ethernet..." : "Ethernet Connect"}
+        </button>
         <LabeledInput label="Port" value={connection.port} onChange={(port) => setConnection((current) => ({ ...current, port }))} small />
         <LabeledInput
           label="Username"
@@ -1703,14 +1787,18 @@ function App() {
             Disconnect
           </button>
         ) : (
-          <button className="button primary" type="button" onClick={connect} disabled={busy}>
+          <button className="button primary" type="button" onClick={() => connect()} disabled={busy}>
             <PlugZap size={17} />
             Connect
           </button>
         )}
         <div className="connection-note">
-          <ShieldCheck size={16} />
-          webMAN MOD usually uses anonymous FTP on port 21.
+          {directLanReport?.ftp?.ok ? <Cable size={16} /> : <ShieldCheck size={16} />}
+          <span>
+            {directLanReport?.ftp?.ok
+              ? `Ethernet FTP ready at ${directLanReport.ps3Ip}.`
+              : "webMAN MOD usually uses anonymous FTP on port 21."}
+          </span>
         </div>
       </section>
 
@@ -1925,6 +2013,7 @@ function App() {
           onRestoreMap={runDirectLanRestore}
           onCopyScript={copyDirectLanScript}
           onApplyPreset={() => useDirectLanPreset(directLanDraft.ps3Ip || "192.168.1.3")}
+          onConnectNow={connectViaEthernet}
           onClose={() => setDirectLanOpen(false)}
           onSpeedTest={runSpeedTest}
         />
@@ -2679,12 +2768,21 @@ function DirectLanDialog({
   onRestoreMap,
   onCopyScript,
   onApplyPreset,
+  onConnectNow,
   onClose,
   onSpeedTest
 }) {
   const adapterIps = report?.adapterIps?.map((ipInfo) => `${ipInfo.ipAddress}/${ipInfo.prefixLength}`).join(", ") || "Not detected";
   const reportTone = report?.sameSubnet ? "ok" : "warn";
-  const busyLabel = busy === "detect" ? "Detecting" : busy === "apply" ? "Mapping" : busy === "restore" ? "Restoring" : "";
+  const busyLabel = busy === "detect"
+    ? "Detecting"
+    : busy === "apply"
+      ? "Mapping"
+      : busy === "restore"
+        ? "Restoring"
+        : busy === "ethernet-connect"
+          ? "Connecting"
+          : "";
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -2718,6 +2816,8 @@ function DirectLanDialog({
           <div className={report ? `pair-result ${reportTone}` : "pair-result warn"}>
             {busyLabel || report?.summary || "Run detection to map this PC Ethernet port to the PS3 link."}
           </div>
+
+          <DirectLanGuide draft={draft} report={report} />
 
           <div className="lan-grid lan-grid-wide">
             <span>Adapter</span>
@@ -2782,12 +2882,42 @@ function DirectLanDialog({
             <X size={16} />
             Restore Map
           </button>
-          <button className="button primary" type="button" onClick={onApplyMap} disabled={!draft.ps3Ip || Boolean(busy)}>
+          <button className="button secondary" type="button" onClick={onApplyMap} disabled={!draft.ps3Ip || Boolean(busy)}>
             <Router size={16} />
             {busy === "apply" ? "Mapping" : "Auto-map"}
           </button>
+          <button className="button primary" type="button" onClick={onConnectNow} disabled={!draft.ps3Ip || Boolean(busy)}>
+            <PlugZap size={16} />
+            {busy === "ethernet-connect" ? "Connecting" : "Connect Now"}
+          </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+function DirectLanGuide({ draft, report }) {
+  const pcIp = draft.pcIp || report?.recommendedPcIp || "192.168.1.250";
+  const ps3Ip = draft.ps3Ip || report?.ps3Ip || "192.168.1.3";
+
+  return (
+    <div className="lan-guide" aria-label="Direct Ethernet walkthrough">
+      <div>
+        <strong>1. Cable</strong>
+        <span>PC Ethernet port directly to PS3 Ethernet port.</span>
+      </div>
+      <div>
+        <strong>2. PS3</strong>
+        <span>Wired manual IP {ps3Ip}, subnet 255.255.255.0. Internet test can fail.</span>
+      </div>
+      <div>
+        <strong>3. PC</strong>
+        <span>Auto-map adds {pcIp} and routes only {ps3Ip} over Ethernet.</span>
+      </div>
+      <div>
+        <strong>4. App</strong>
+        <span>{report?.ftp?.ok ? "FTP is open. Connect Now is ready." : "Detect, Auto-map if needed, then Connect Now."}</span>
+      </div>
     </div>
   );
 }

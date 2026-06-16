@@ -2,6 +2,24 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.13 - 2026-06-16
+
+- Added an **Ethernet Connect** button beside the PS3 IP field for the direct-cable flow.
+- Added a **Connect Now** button inside Direct LAN so users no longer need to close the dialog and find the main Connect button.
+- Added a compact Direct LAN walkthrough with cable, PS3, PC, and app steps.
+- Updated the connection note to show when Ethernet FTP is ready.
+- Stopped idle control-socket timeouts from flipping the app into a disconnected state while the PS3 FTP target is still known.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- `node --check electron/main.cjs`
+- `node --check electron/preload.cjs`
+- `npm run release:beta`
+- Browser QA: main-bar Ethernet Connect, Direct LAN walkthrough, Connect Now, connected status, and console health.
+- Packaged Windows EXE smoke test.
+
 ## 0.1.12 - 2026-06-16
 
 - Rebuilt Direct LAN into a Direct LAN Builder for PC-to-PS3 Ethernet links.

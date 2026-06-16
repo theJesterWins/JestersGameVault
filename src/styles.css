@@ -172,7 +172,7 @@ button {
 .connection-bar {
   border-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 92px minmax(150px, 0.7fr) minmax(150px, 0.7fr) auto minmax(220px, 0.9fr);
+  grid-template-columns: minmax(170px, 1fr) auto 86px minmax(140px, 0.65fr) minmax(140px, 0.65fr) auto minmax(210px, 0.8fr);
   gap: 10px;
   align-items: end;
   padding: 12px;
@@ -320,6 +320,13 @@ button {
 .button.warning {
   color: #ffe16b;
   border-color: rgba(244, 207, 74, 0.48);
+}
+
+.button.ethernet-button {
+  min-width: 156px;
+  color: #dffffb;
+  border-color: rgba(82, 223, 209, 0.36);
+  background: rgba(82, 223, 209, 0.08);
 }
 
 .button.danger-action {
@@ -1735,6 +1742,35 @@ button {
   grid-template-columns: 108px minmax(0, 1fr) 108px minmax(0, 1fr);
 }
 
+.lan-guide {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lan-guide div {
+  min-width: 0;
+  border: 1px solid rgba(82, 223, 209, 0.18);
+  border-radius: 6px;
+  padding: 9px;
+  background: rgba(82, 223, 209, 0.055);
+}
+
+.lan-guide strong {
+  display: block;
+  color: #dffffb;
+  font-size: 12px;
+}
+
+.lan-guide span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .lan-steps {
   margin-top: 12px;
   display: grid;
@@ -1881,6 +1917,7 @@ button {
 
   .lan-form,
   .lan-script-grid,
+  .lan-guide,
   .lan-grid.lan-grid-wide {
     grid-template-columns: minmax(0, 1fr);
   }

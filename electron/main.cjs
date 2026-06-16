@@ -520,7 +520,8 @@ ipcMain.handle("ftp:disconnect", async () => {
 });
 
 ipcMain.handle("ftp:status", async () => ({
-  connected: Boolean(ftpClient && !ftpClient.closed),
+  connected: Boolean(ftpConfig),
+  controlConnected: Boolean(ftpClient && !ftpClient.closed),
   host: ftpConfig?.host,
   port: ftpConfig?.port,
   user: ftpConfig?.user
