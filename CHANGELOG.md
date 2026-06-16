@@ -2,6 +2,21 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.9 - 2026-06-16
+
+- Reworked Vault Doctor into a compact warning banner that only appears for actionable warning/error items.
+- Removed passive green "everything is OK" Doctor cards from the main workspace.
+- Removed the passive `Wrong target folder risk` warning while browsing PS2/PSX/PSP folders with a local PS3 ISO selected.
+- Fixed browser-preview path switching so QA no longer resets the mock PS3 folder after each path change.
+- Added desktop-style resize handles for local/PS3 pane width, file area vs. queue height, and queue vs. live-log height.
+- Kept the right-side rail contained with its own scroll area when the window is short or panels are resized.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- Browser QA: PS3ISO warning banner, PS2/PSX/PSP folder switching, no wrong-folder warning while browsing, resize handles, contained right rail, and no new console warnings/errors.
+
 ## 0.1.8 - 2026-06-16
 
 - Added folder upload by expanding selected folders into resilient queue rows.

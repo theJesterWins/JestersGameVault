@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
-  BadgeCheck,
   Cable,
   Check,
   ChevronLeft,
@@ -55,7 +54,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.8",
+  version: "0.1.9",
   electron: "",
   chrome: "",
   node: "",
@@ -65,6 +64,12 @@ const DEFAULT_LAYOUT = {
   localShare: 52,
   queueHeight: 320,
   logHeight: 126
+};
+
+const LAYOUT_LIMITS = {
+  localShare: { min: 28, max: 72, step: 1 },
+  queueHeight: { min: 220, max: 660, step: 10 },
+  logHeight: { min: 80, max: 320, step: 10 }
 };
 
 const SAMPLE_LOCAL = [
@@ -110,7 +115,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.8-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.9-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -278,6 +283,8 @@ const api = window.vaultAPI || createMockApi();
 function App() {
   const canceledTransfersRef = useRef(new Set());
   const uploadRunnerRef = useRef(Promise.resolve());
+  const mockRemoteInitializedRef = useRef(false);
+  const workspaceRef = useRef(null);
   const [connection, setConnection] = useState({
     host: "",
     port: "21",
@@ -305,6 +312,7 @@ function App() {
   const [directLanOpen, setDirectLanOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [remoteDragActive, setRemoteDragActive] = useState(false);
+  const [activeResize, setActiveResize] = useState("");
   const [lastProgressAt, setLastProgressAt] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const [events, setEvents] = useState(() => [
@@ -360,7 +368,9 @@ function App() {
   }, [refreshLocal]);
 
   useEffect(() => {
-    if (!window.vaultAPI) refreshRemote("/dev_hdd0/PS3ISO/");
+    if (window.vaultAPI || mockRemoteInitializedRef.current) return;
+    mockRemoteInitializedRef.current = true;
+    refreshRemote("/dev_hdd0/PS3ISO/");
   }, [refreshRemote]);
 
   useEffect(() => {
@@ -463,11 +473,9 @@ function App() {
         localEntries: local.entries,
         remoteEntries: remote.entries,
         remotePath: remote.path,
-        selectedLocalEntry,
-        selectedRemoteEntry,
         queue
       }),
-    [local.entries, queue, remote.entries, remote.path, selectedLocalEntry, selectedRemoteEntry]
+    [local.entries, queue, remote.entries, remote.path]
   );
 
   async function connect() {
@@ -1291,9 +1299,67 @@ function App() {
     setQueue((items) => items.filter((item) => !["Completed", "Verified", "Canceled", "Skipped"].includes(item.status)));
   }
 
+  function setLayoutValue(key, value) {
+    const limit = LAYOUT_LIMITS[key];
+    const rounded = Math.round(Number(value) / limit.step) * limit.step;
+    setLayout((current) => ({
+      ...current,
+      [key]: clampNumber(rounded, limit.min, limit.max, current[key])
+    }));
+  }
+
+  function startResize(kind, event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startLayout = layout;
+    const workspaceRect = workspaceRef.current?.getBoundingClientRect();
+    setActiveResize(kind);
+
+    const move = (moveEvent) => {
+      if (kind === "panes" && workspaceRect) {
+        const fixedWidth = 160 + 230 + 8 + 40;
+        const availableWidth = Math.max(workspaceRect.width - fixedWidth, 320);
+        const localWidth = clampNumber(moveEvent.clientX - workspaceRect.left, availableWidth * 0.28, availableWidth * 0.72, availableWidth * 0.52);
+        setLayoutValue("localShare", (localWidth / availableWidth) * 100);
+        return;
+      }
+
+      if (kind === "queue") {
+        setLayoutValue("queueHeight", startLayout.queueHeight - (moveEvent.clientY - startY));
+        return;
+      }
+
+      if (kind === "log") {
+        setLayoutValue("logHeight", startLayout.logHeight - (moveEvent.clientY - startY));
+      }
+    };
+
+    const stop = () => {
+      setActiveResize("");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }
+
+  function nudgeLayout(kind, direction) {
+    if (kind === "panes") {
+      setLayoutValue("localShare", layout.localShare + direction * 2);
+    } else if (kind === "queue") {
+      setLayoutValue("queueHeight", layout.queueHeight + direction * 20);
+    } else if (kind === "log") {
+      setLayoutValue("logHeight", layout.logHeight + direction * 10);
+    }
+  }
+
   return (
     <main
-      className="app-shell"
+      className={activeResize ? `app-shell is-resizing resizing-${activeResize}` : "app-shell"}
       style={{
         "--local-fr": `${layout.localShare}fr`,
         "--remote-fr": `${100 - layout.localShare}fr`,
@@ -1368,7 +1434,9 @@ function App() {
         </div>
       </section>
 
-      <section className="workspace">
+      <VaultDoctorBanner report={doctorReport} onRun={runVaultDoctor} />
+
+      <section className="workspace" ref={workspaceRef}>
         <FilePane
           title="Local Files"
           tone="teal"
@@ -1385,6 +1453,14 @@ function App() {
           footer={`${local.entries.length} items`}
           emptyPathText="Choose a local folder or files"
           action={<button className="icon-button" type="button" title="Choose local folder" onClick={chooseLocalFolder}><HardDrive size={17} /></button>}
+        />
+
+        <ResizeHandle
+          orientation="vertical"
+          active={activeResize === "panes"}
+          label="Resize local and PS3 panes"
+          onPointerDown={(event) => startResize("panes", event)}
+          onNudge={(direction) => nudgeLayout("panes", direction)}
         />
 
         <TransferColumn
@@ -1476,12 +1552,18 @@ function App() {
           </div>
           <div className="rail-section">
             <h2>Layout</h2>
-            <LayoutControls layout={layout} onChange={setLayout} />
+            <LayoutControls layout={layout} onChange={setLayout} onReset={() => setLayout(DEFAULT_LAYOUT)} />
           </div>
         </aside>
       </section>
 
-      <VaultDoctor report={doctorReport} onRun={runVaultDoctor} />
+      <ResizeHandle
+        orientation="horizontal"
+        active={activeResize === "queue"}
+        label="Resize file panes and transfer queue"
+        onPointerDown={(event) => startResize("queue", event)}
+        onNudge={(direction) => nudgeLayout("queue", direction)}
+      />
 
       <section className="queue-panel" aria-label="Transfer queue">
         <div className="queue-header">
@@ -1501,6 +1583,14 @@ function App() {
           </div>
         </div>
         <QueueTable items={queue} onCancel={cancelQueueItem} />
+        <ResizeHandle
+          orientation="horizontal"
+          compact
+          active={activeResize === "log"}
+          label="Resize queue table and live log"
+          onPointerDown={(event) => startResize("log", event)}
+          onNudge={(direction) => nudgeLayout("log", direction)}
+        />
         <LiveLog events={events} />
       </section>
 
@@ -1641,37 +1731,40 @@ function ToggleOption({ label, checked, onChange }) {
   );
 }
 
-function VaultDoctor({ report, onRun }) {
-  const icon = report.needsAttention > 0 ? <AlertTriangle size={18} /> : <BadgeCheck size={18} />;
-  const topIssues = report.issues.slice(0, 4);
+function VaultDoctorBanner({ report, onRun }) {
+  const alertIssues = report.issues.filter((issue) => issue.severity !== "ok");
+  if (alertIssues.length === 0) return null;
+
+  const hasError = alertIssues.some((issue) => issue.severity === "error");
+  const topIssues = alertIssues.slice(0, 3);
+  const hiddenCount = alertIssues.length - topIssues.length;
 
   return (
-    <section className={`doctor-panel ${report.needsAttention > 0 ? "warn" : "ok"}`} aria-label="Vault Doctor diagnostics">
-      <div className="doctor-summary">
-        <div className="doctor-title">
-          <span className="doctor-icon">{icon}</span>
-          <div>
-            <h2>Vault Doctor</h2>
-            <p>{report.summary}</p>
-          </div>
+    <section className={`doctor-banner ${hasError ? "error" : "warn"}`} aria-label="Vault Doctor warnings">
+      <div className="doctor-alert-main">
+        <span className="doctor-icon"><AlertTriangle size={18} /></span>
+        <div>
+          <h2>Vault Doctor</h2>
+          <p>{report.summary}</p>
         </div>
-        <div className="doctor-stats">
-          <span><strong>{report.ready}</strong> Ready</span>
-          <span><strong>{report.needsAttention}</strong> Check</span>
-          <span><strong>{report.issues.length}</strong> Findings</span>
-        </div>
-        <button className="button secondary" type="button" onClick={onRun}>
-          <ClipboardCheck size={16} />
-          Scan
-        </button>
       </div>
-      <div className="doctor-findings">
+
+      <div className="doctor-alert-findings">
         {topIssues.map((issue) => (
-          <div className={`doctor-finding ${issue.severity}`} key={issue.id}>
+          <span className={`doctor-pill ${issue.severity}`} key={issue.id} title={issue.detail}>
             <strong>{issue.title}</strong>
             <span>{issue.detail}</span>
-          </div>
+          </span>
         ))}
+        {hiddenCount > 0 ? <span className="doctor-pill muted">+{hiddenCount} more</span> : null}
+      </div>
+
+      <div className="doctor-alert-actions">
+        <span><strong>{report.needsAttention}</strong> Check</span>
+        <button className="button secondary compact" type="button" onClick={onRun}>
+          <ClipboardCheck size={15} />
+          Scan
+        </button>
       </div>
     </section>
   );
@@ -1699,7 +1792,7 @@ function SpeedHistory({ samples }) {
   );
 }
 
-function LayoutControls({ layout, onChange }) {
+function LayoutControls({ layout, onChange, onReset }) {
   const update = (key, value) => {
     onChange((current) => ({ ...current, [key]: Number(value) }));
   };
@@ -1710,8 +1803,8 @@ function LayoutControls({ layout, onChange }) {
         <span>Local width</span>
         <input
           type="range"
-          min="35"
-          max="65"
+          min={LAYOUT_LIMITS.localShare.min}
+          max={LAYOUT_LIMITS.localShare.max}
           value={layout.localShare}
           onChange={(event) => update("localShare", event.target.value)}
         />
@@ -1720,9 +1813,9 @@ function LayoutControls({ layout, onChange }) {
         <span>Queue height</span>
         <input
           type="range"
-          min="220"
-          max="520"
-          step="10"
+          min={LAYOUT_LIMITS.queueHeight.min}
+          max={LAYOUT_LIMITS.queueHeight.max}
+          step={LAYOUT_LIMITS.queueHeight.step}
           value={layout.queueHeight}
           onChange={(event) => update("queueHeight", event.target.value)}
         />
@@ -1731,14 +1824,41 @@ function LayoutControls({ layout, onChange }) {
         <span>Log height</span>
         <input
           type="range"
-          min="80"
-          max="220"
-          step="10"
+          min={LAYOUT_LIMITS.logHeight.min}
+          max={LAYOUT_LIMITS.logHeight.max}
+          step={LAYOUT_LIMITS.logHeight.step}
           value={layout.logHeight}
           onChange={(event) => update("logHeight", event.target.value)}
         />
       </label>
+      <button className="button secondary compact" type="button" onClick={onReset}>
+        Reset
+      </button>
     </div>
+  );
+}
+
+function ResizeHandle({ orientation, active, compact = false, label, onPointerDown, onNudge }) {
+  const isVertical = orientation === "vertical";
+
+  const handleKeyDown = (event) => {
+    const growKeys = isVertical ? ["ArrowRight"] : ["ArrowUp"];
+    const shrinkKeys = isVertical ? ["ArrowLeft"] : ["ArrowDown"];
+    if (![...growKeys, ...shrinkKeys].includes(event.key)) return;
+    event.preventDefault();
+    onNudge(growKeys.includes(event.key) ? 1 : -1);
+  };
+
+  return (
+    <div
+      className={`resize-handle ${orientation}${active ? " active" : ""}${compact ? " compact" : ""}`}
+      role="separator"
+      aria-orientation={orientation}
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={handleKeyDown}
+    />
   );
 }
 
@@ -2300,7 +2420,7 @@ function isLikelyIsoKeySize(size) {
   return Number(size) > 0 && Number(size) <= 64;
 }
 
-function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, selectedLocalEntry, queue }) {
+function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, queue }) {
   const issues = [];
   const readyItems = new Set();
   const localFiles = localEntries.filter((entry) => !entry.isDirectory);
@@ -2368,14 +2488,6 @@ function buildVaultDoctorReport({ localEntries, remoteEntries, remotePath, selec
       if (!localByName.has(isoName)) {
         addIssue("warn", "Local key without ISO", `${key.name} has no matching local ${isoName}.`);
       }
-    }
-  } else {
-    const selectedHasPs3Key = selectedLocalEntry && (
-      isPs3IsoKeyFile(selectedLocalEntry.name) ||
-      (isPs3IsoFile(selectedLocalEntry.name) && Boolean(findMatchingKeyInEntries(selectedLocalEntry, localFiles)))
-    );
-    if (selectedHasPs3Key) {
-      addIssue("warn", "Wrong target folder risk", `${selectedLocalEntry.name} looks like PS3 ISO/key work, but the active PS3 folder is ${remotePath}.`);
     }
   }
 
