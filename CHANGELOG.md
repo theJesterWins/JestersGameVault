@@ -2,6 +2,21 @@
 
 All notable beta changes for Jester's Game Vault are tracked here.
 
+## 0.1.11 - 2026-06-16
+
+- Added a toggleable Vault Library / Sync view that compares the current local folder with the active PS3 folder.
+- Added library status rows for missing games, ready matches, size mismatches, missing PS3 ISO keys, orphan keys, remote-only items, and target-folder hints.
+- Added summary counters and filters for needs-action, missing, ready, remote-only, and all library items.
+- Added Library staging actions that select the local item and open the recommended PS3 target folder while reusing the existing transfer/key-pair flow.
+- Added PS2/PSX/PSP target inference from the current PS3 folder and obvious filename hints.
+
+Validation:
+
+- `npm run lint`
+- `npm run build`
+- Browser QA: Library panel render, filter controls, scan refresh, and stage action.
+- Packaged Windows EXE smoke test.
+
 ## 0.1.10 - 2026-06-16
 
 - Fixed a transient Vault Doctor warning flash when switching quickly between PS2ISO/PS3ISO path buttons.

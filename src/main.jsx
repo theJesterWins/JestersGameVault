@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
+  ArrowRight,
   Cable,
   Check,
   ChevronLeft,
@@ -16,6 +17,8 @@ import {
   Gamepad2,
   HardDrive,
   Home,
+  Library,
+  ListChecks,
   PlugZap,
   Power,
   RefreshCw,
@@ -54,7 +57,7 @@ const DEFAULT_SETTINGS = {
 const MAX_SPEED_HISTORY = 24;
 const DEFAULT_APP_INFO = {
   name: "Jester's Game Vault",
-  version: "0.1.10",
+  version: "0.1.11",
   electron: "",
   chrome: "",
   node: "",
@@ -117,7 +120,7 @@ function createMockApi() {
 
   return {
     async getAppInfo() {
-      return { ...DEFAULT_APP_INFO, version: "0.1.10-preview" };
+      return { ...DEFAULT_APP_INFO, version: "0.1.11-preview" };
     },
     async listLocal(targetPath) {
       return {
@@ -315,6 +318,8 @@ function App() {
   const [keyPairCandidate, setKeyPairCandidate] = useState(null);
   const [directLanOpen, setDirectLanOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryFilter, setLibraryFilter] = useState("attention");
   const [remoteDragActive, setRemoteDragActive] = useState(false);
   const [activeResize, setActiveResize] = useState("");
   const [lastProgressAt, setLastProgressAt] = useState(null);
@@ -486,6 +491,17 @@ function App() {
       }),
     [local.entries, queue, remote.entries, remote.loadedPath, remote.path]
   );
+  const libraryReport = useMemo(
+    () =>
+      buildVaultLibraryReport({
+        localEntries: local.entries,
+        remoteEntries: remote.entries,
+        localPath: local.path,
+        remotePath: remote.path,
+        remoteReady: Boolean(remote.loadedPath) && remotePathsMatch(remote.path, remote.loadedPath)
+      }),
+    [local.entries, local.path, remote.entries, remote.loadedPath, remote.path]
+  );
 
   async function connect() {
     setBusy(true);
@@ -588,6 +604,34 @@ function App() {
     const needsAttention = doctorReport.issues.filter((issue) => issue.severity !== "ok").length;
     setStatus(needsAttention ? `Vault Doctor found ${needsAttention} item(s) to check.` : "Vault Doctor found no issues in this view.");
     pushEvent(needsAttention ? "warn" : "success", needsAttention ? `Vault Doctor found ${needsAttention} item(s) to check.` : "Vault Doctor found no issues.");
+    await refreshLocal(local.path);
+    await refreshRemote(remote.path);
+  }
+
+  async function stageLibraryItem(item) {
+    if (!item) return;
+
+    if (item.targetPath && !remotePathsMatch(remote.path, item.targetPath)) {
+      await selectRemotePath(item.targetPath);
+    }
+
+    if (item.localEntry) {
+      setSelectedLocal(item.localEntry.path);
+      setStatus(`Staged ${item.localEntry.name}. Review the target folder, then transfer when ready.`);
+      pushEvent("info", `Library staged local item ${item.localEntry.name} for ${item.targetPath || remote.path}.`);
+      return;
+    }
+
+    if (item.remoteEntry) {
+      setSelectedRemote(item.remoteEntry.path);
+      setStatus(`Selected ${item.remoteEntry.name} on the PS3.`);
+      pushEvent("info", `Library selected remote item ${item.remoteEntry.name}.`);
+    }
+  }
+
+  async function refreshLibraryView() {
+    setStatus("Refreshing Library / Sync view.");
+    pushEvent("info", "Library / Sync refresh requested.");
     await refreshLocal(local.path);
     await refreshRemote(remote.path);
   }
@@ -1386,6 +1430,14 @@ function App() {
           </div>
         </div>
         <div className="status-strip">
+          <button
+            className={libraryOpen ? "button secondary compact active" : "button secondary compact"}
+            type="button"
+            onClick={() => setLibraryOpen((open) => !open)}
+          >
+            <Library size={15} />
+            Library
+          </button>
           <button className="link-button" type="button" onClick={() => setAboutOpen(true)}>
             About
           </button>
@@ -1445,6 +1497,16 @@ function App() {
       </section>
 
       <VaultDoctorBanner report={doctorReport} onRun={runVaultDoctor} />
+
+      {libraryOpen ? (
+        <VaultLibraryPanel
+          report={libraryReport}
+          filter={libraryFilter}
+          onFilterChange={setLibraryFilter}
+          onRefresh={refreshLibraryView}
+          onStage={stageLibraryItem}
+        />
+      ) : null}
 
       <section className="workspace" ref={workspaceRef}>
         <FilePane
@@ -1778,6 +1840,114 @@ function VaultDoctorBanner({ report, onRun }) {
       </div>
     </section>
   );
+}
+
+const LIBRARY_FILTERS = [
+  { id: "attention", label: "Needs Action" },
+  { id: "missing", label: "Missing" },
+  { id: "ready", label: "Ready" },
+  { id: "remote", label: "Remote Only" },
+  { id: "all", label: "All" }
+];
+
+function VaultLibraryPanel({ report, filter, onFilterChange, onRefresh, onStage }) {
+  const filteredItems = filterLibraryItems(report.items, filter);
+
+  return (
+    <section className="library-panel" aria-label="Vault Library sync view">
+      <div className="library-topline">
+        <div className="library-title">
+          <span className="library-icon"><ListChecks size={18} /></span>
+          <div>
+            <h2>Vault Library</h2>
+            <p>{report.localPath ? report.summary : "Choose a local folder to compare with the active PS3 folder."}</p>
+          </div>
+        </div>
+        <div className="library-actions">
+          <div className="library-segments" aria-label="Library filters">
+            {LIBRARY_FILTERS.map((item) => (
+              <button
+                className={filter === item.id ? "segment-button active" : "segment-button"}
+                type="button"
+                key={item.id}
+                onClick={() => onFilterChange(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <button className="button secondary compact" type="button" onClick={onRefresh}>
+            <RefreshCw size={15} />
+            Scan
+          </button>
+        </div>
+      </div>
+
+      <div className="library-stats" aria-label="Library sync summary">
+        <LibraryStat label="Ready" value={report.counts.ready} tone="ready" />
+        <LibraryStat label="Missing" value={report.counts.missing} tone="missing" />
+        <LibraryStat label="Issues" value={report.counts.issues} tone="issue" />
+        <LibraryStat label="Remote Only" value={report.counts.remoteOnly} tone="remote" />
+        <LibraryStat label="Target Hints" value={report.counts.targetHints} tone="target" />
+      </div>
+
+      <div className="library-table" role="table">
+        <div className="library-row library-head" role="row">
+          <span>Name</span>
+          <span>Type</span>
+          <span>Local</span>
+          <span>PS3</span>
+          <span>Status</span>
+          <span>Action</span>
+        </div>
+        <div className="library-body">
+          {filteredItems.length === 0 ? (
+            <div className="library-empty">
+              <Search size={16} />
+              {report.items.length === 0 ? "No library items in this view." : "No items match this filter."}
+            </div>
+          ) : (
+            filteredItems.map((item) => (
+              <div className={`library-row ${item.status}`} role="row" key={item.id}>
+                <span className="library-game">
+                  {item.icon === "folder" ? <Folder size={17} /> : item.icon === "disc" ? <Disc3 size={17} /> : <File size={17} />}
+                  <span>
+                    <strong>{item.name}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                </span>
+                <span>{item.platform}</span>
+                <span>{item.localLabel}</span>
+                <span>{item.remoteLabel}</span>
+                <span><LibraryStatusPill status={item.status} label={item.statusLabel} /></span>
+                <span className="library-action">
+                  {item.action ? (
+                    <button className="button secondary compact" type="button" onClick={() => onStage(item)}>
+                      {item.localEntry ? <ArrowRight size={14} /> : <Check size={14} />}
+                      {item.action}
+                    </button>
+                  ) : null}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LibraryStat({ label, value, tone }) {
+  return (
+    <div className={`library-stat ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function LibraryStatusPill({ status, label }) {
+  return <span className={`library-status ${status}`}>{label}</span>;
 }
 
 function SpeedHistory({ samples }) {
@@ -2395,6 +2565,233 @@ function findMatchingKeyInEntries(isoEntry, entries) {
   if (!isoEntry || !isPs3IsoFile(isoEntry.name)) return null;
   const expectedNames = expectedKeyNamesForIso(isoEntry.name);
   return entries.find((entry) => !entry.isDirectory && expectedNames.includes(entry.name)) || null;
+}
+
+function buildVaultLibraryReport({ localEntries, remoteEntries, localPath, remotePath, remoteReady = true }) {
+  const normalizedRemotePath = normalizeRemotePathText(remotePath);
+  const currentRemoteEntries = remoteReady && remoteEntriesBelongToPath(remoteEntries, normalizedRemotePath) ? remoteEntries : [];
+  const remoteByName = new Map(currentRemoteEntries.map((entry) => [entry.name.toLowerCase(), entry]));
+  const localByName = new Map(localEntries.map((entry) => [entry.name.toLowerCase(), entry]));
+  const usedRemotePaths = new Set();
+  const usedLocalPaths = new Set();
+  const items = [];
+
+  for (const localEntry of localEntries.filter(isLibraryGameEntry)) {
+    const profile = describeLibraryEntry(localEntry, normalizedRemotePath);
+    const targetMatchesCurrent = remotePathsMatch(profile.targetPath, normalizedRemotePath);
+    const remoteEntry = targetMatchesCurrent ? remoteByName.get(localEntry.name.toLowerCase()) : null;
+    const localKey = profile.requiresKey ? findMatchingKeyInEntries(localEntry, localEntries) : null;
+    const remoteKey = profile.requiresKey ? findMatchingKeyInEntries(localEntry, currentRemoteEntries) : null;
+    let status = "ready";
+    let statusLabel = "Ready";
+    let detail = profile.detail;
+    let action = remoteEntry ? "Select" : "Stage";
+    let remoteLabel = remoteEntry ? formatEntryFootprint(remoteEntry) : "Missing";
+
+    usedLocalPaths.add(localEntry.path);
+    if (remoteEntry) usedRemotePaths.add(remoteEntry.path);
+
+    if (!remoteReady) {
+      status = "scanning";
+      statusLabel = "Scanning";
+      detail = "Waiting for the PS3 folder listing.";
+      action = null;
+      remoteLabel = "Loading";
+    } else if (!targetMatchesCurrent) {
+      status = "target";
+      statusLabel = "Target";
+      detail = `Recommended target is ${profile.targetPath}.`;
+      action = "Open";
+      remoteLabel = profile.targetPath;
+    } else if (!remoteEntry) {
+      status = "missing";
+      statusLabel = "Missing";
+      detail = "Present locally, missing from the active PS3 folder.";
+    } else if (localEntry.size && remoteEntry.size && localEntry.size !== remoteEntry.size) {
+      status = "mismatch";
+      statusLabel = "Mismatch";
+      detail = "Present on both sides, but the sizes differ.";
+      action = "Stage";
+    } else if (profile.requiresKey && !localKey && !remoteKey) {
+      status = "needs-key";
+      statusLabel = "Needs Key";
+      detail = `${localEntry.name} needs ${expectedKeyNamesForIso(localEntry.name).join(" or ")}.`;
+      action = "Stage";
+    } else if (profile.requiresKey && remoteEntry && !remoteKey) {
+      status = "needs-key";
+      statusLabel = "Needs Key";
+      detail = "ISO is on the PS3, but the matching key is not in this folder.";
+      action = localKey ? "Stage" : "Select";
+    } else if (remoteEntry) {
+      detail = profile.requiresKey ? "ISO and key pairing look ready in this view." : "Local and PS3 copies match by name and size.";
+    }
+
+    items.push({
+      id: `local-${localEntry.path}`,
+      name: localEntry.name,
+      platform: profile.platform,
+      icon: profile.icon,
+      localEntry,
+      remoteEntry,
+      targetPath: profile.targetPath,
+      localLabel: formatEntryFootprint(localEntry),
+      remoteLabel,
+      status,
+      statusLabel,
+      detail,
+      action
+    });
+  }
+
+  for (const localKey of localEntries.filter((entry) => !entry.isDirectory && isPs3IsoKeyFile(entry.name))) {
+    const isoName = `${baseNameWithoutExtension(localKey.name)}.iso`;
+    if (localByName.has(isoName.toLowerCase())) continue;
+    usedLocalPaths.add(localKey.path);
+    items.push({
+      id: `local-key-${localKey.path}`,
+      name: localKey.name,
+      platform: "PS3 Key",
+      icon: "file",
+      localEntry: localKey,
+      remoteEntry: null,
+      targetPath: normalizedRemotePath,
+      localLabel: formatEntryFootprint(localKey),
+      remoteLabel: "No ISO",
+      status: "orphan-key",
+      statusLabel: "Orphan Key",
+      detail: `No local ${isoName} was found beside this key.`,
+      action: "Select"
+    });
+  }
+
+  for (const remoteEntry of currentRemoteEntries.filter(isLibraryGameEntry)) {
+    if (usedRemotePaths.has(remoteEntry.path)) continue;
+    const profile = describeLibraryEntry(remoteEntry, normalizedRemotePath);
+    const remoteKey = profile.requiresKey ? findMatchingKeyInEntries(remoteEntry, currentRemoteEntries) : null;
+    const status = profile.requiresKey && !remoteKey ? "needs-key" : "remote-only";
+    items.push({
+      id: `remote-${remoteEntry.path}`,
+      name: remoteEntry.name,
+      platform: profile.platform,
+      icon: profile.icon,
+      localEntry: null,
+      remoteEntry,
+      targetPath: normalizedRemotePath,
+      localLabel: "Not local",
+      remoteLabel: formatEntryFootprint(remoteEntry),
+      status,
+      statusLabel: status === "needs-key" ? "Needs Key" : "Remote Only",
+      detail: status === "needs-key" ? "Remote PS3 ISO is missing a matching key." : "Only present in the active PS3 folder.",
+      action: "Select"
+    });
+  }
+
+  for (const remoteKey of currentRemoteEntries.filter((entry) => !entry.isDirectory && isPs3IsoKeyFile(entry.name))) {
+    const isoName = `${baseNameWithoutExtension(remoteKey.name)}.iso`;
+    if (remoteByName.has(isoName.toLowerCase())) continue;
+    items.push({
+      id: `remote-key-${remoteKey.path}`,
+      name: remoteKey.name,
+      platform: "PS3 Key",
+      icon: "file",
+      localEntry: null,
+      remoteEntry: remoteKey,
+      targetPath: normalizedRemotePath,
+      localLabel: "Not local",
+      remoteLabel: formatEntryFootprint(remoteKey),
+      status: "orphan-key",
+      statusLabel: "Orphan Key",
+      detail: `No remote ${isoName} was found beside this key.`,
+      action: "Select"
+    });
+  }
+
+  const sortedItems = items.sort((left, right) => libraryStatusRank(right.status) - libraryStatusRank(left.status) || left.name.localeCompare(right.name));
+  const counts = sortedItems.reduce(
+    (next, item) => {
+      if (item.status === "ready") next.ready += 1;
+      if (item.status === "missing") next.missing += 1;
+      if (["mismatch", "needs-key", "orphan-key"].includes(item.status)) next.issues += 1;
+      if (item.status === "remote-only") next.remoteOnly += 1;
+      if (item.status === "target") next.targetHints += 1;
+      return next;
+    },
+    { ready: 0, missing: 0, issues: 0, remoteOnly: 0, targetHints: 0 }
+  );
+  const attention = counts.missing + counts.issues + counts.targetHints;
+  const summary = `${counts.ready} ready, ${attention} need action, ${counts.remoteOnly} remote-only.`;
+
+  return {
+    localPath,
+    remotePath: normalizedRemotePath,
+    items: sortedItems,
+    counts,
+    summary
+  };
+}
+
+function filterLibraryItems(items, filter) {
+  if (filter === "all") return items;
+  if (filter === "ready") return items.filter((item) => item.status === "ready");
+  if (filter === "missing") return items.filter((item) => item.status === "missing");
+  if (filter === "remote") return items.filter((item) => ["remote-only", "orphan-key"].includes(item.status) && !item.localEntry);
+  return items.filter((item) => ["missing", "mismatch", "needs-key", "orphan-key", "target", "scanning"].includes(item.status));
+}
+
+function isLibraryGameEntry(entry) {
+  if (!entry || entry.name === "..") return false;
+  if (entry.isDirectory) return true;
+  if (isPs3IsoKeyFile(entry.name)) return false;
+  return [".iso", ".bin", ".cue"].includes(extensionFromName(entry.name).toLowerCase());
+}
+
+function describeLibraryEntry(entry, currentRemotePath) {
+  const lowerName = entry.name.toLowerCase();
+  const extension = extensionFromName(entry.name).toLowerCase();
+  const currentPath = normalizeRemotePathText(currentRemotePath);
+  const currentKnownPath = PS3_PATHS.find((item) => remotePathsMatch(item.path, currentPath));
+  let targetPath = currentKnownPath?.path || currentPath;
+  let platform = currentKnownPath?.label || "PS3";
+
+  if (extension === ".bin" || extension === ".cue" || lowerName.includes("psx") || lowerName.includes("ps1")) {
+    targetPath = "/dev_hdd0/PSXISO/";
+    platform = "PSX";
+  } else if (lowerName.includes("ps3")) {
+    targetPath = "/dev_hdd0/PS3ISO/";
+    platform = "PS3";
+  } else if (lowerName.includes("psp")) {
+    targetPath = "/dev_hdd0/PSPISO/";
+    platform = "PSP";
+  } else if (lowerName.includes("ps2")) {
+    targetPath = "/dev_hdd0/PS2ISO/";
+    platform = "PS2";
+  }
+
+  const isFolder = entry.isDirectory;
+  const requiresKey = platform === "PS3" && isPs3IsoFile(entry.name);
+  const icon = isFolder ? "folder" : extension === ".iso" || extension === ".bin" ? "disc" : "file";
+  const detail = requiresKey ? "PS3 ISO key pairing applies." : `${platform} library item.`;
+
+  return { targetPath, platform, requiresKey, icon, detail };
+}
+
+function formatEntryFootprint(entry) {
+  if (!entry) return "--";
+  if (entry.isDirectory) return "Folder";
+  return formatBytes(entry.size) || entry.type || "File";
+}
+
+function libraryStatusRank(status) {
+  return {
+    "needs-key": 7,
+    mismatch: 6,
+    missing: 5,
+    "orphan-key": 4,
+    target: 3,
+    "remote-only": 2,
+    scanning: 1,
+    ready: 0
+  }[status] || 0;
 }
 
 function isPs3IsoTarget(remotePath) {
